@@ -33,6 +33,7 @@ env:
 jobs:
   # 变更检测 — 找出哪些含 Dockerfile 的目录需要构建
   detect-changes:
+    name: 变更检测
     runs-on: ubuntu-latest
     outputs:
       has-changes: ${{ steps.set-matrix.outputs.has-changes }}
@@ -174,6 +175,7 @@ jobs:
 
   # 并行构建 & 推送 — matrix 消费 detect-changes 的输出
   build-and-push:
+    name: "构建 & 推送 ${{ matrix.dir }}"
     needs: detect-changes
     if: needs.detect-changes.outputs.has-changes == 'true'
     runs-on: ubuntu-latest
