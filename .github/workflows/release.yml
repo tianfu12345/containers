@@ -1,0 +1,228 @@
+name: Release（独立版本发布 + 镜像构建）
+
+on:
+  workflow_dispatch:
+    inputs:
+      directories:
+        description: '要发布的目录（逗号分隔），留空则全部'
+        required: false
+        type: string
+      bump:
+        description: '版本升级类型（auto = conventional commits 自动判断）'
+        required: false
+        type: choice
+        options: ['auto', 'patch', 'minor', 'major']
+        default: 'auto'
+
+env:
+  REGISTRY: ${{ vars.REGISTRY || 'ghcr.io' }}
+  IMAGE_NAME: ${{ vars.IMAGE_NAME || github.repository_owner }}
+  REGISTRY_USER: ${{ vars.DOCKER_USER || github.actor }}
+  REGISTRY_SECRET: ${{ secrets.DOCKER_PASSWORD || secrets.GITHUB_TOKEN }}
+
+jobs:
+  # ── 准备 matrix：扫描目录 → JSON 列表 ──
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set.outputs.matrix }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: 确定发布目录
+        id: set
+        env:
+          DISPATCH_DIRS: ${{ inputs.directories || '' }}
+        run: |
+          DIRS=()
+
+          if [[ -n "$DISPATCH_DIRS" ]]; then
+            IFS=',' read -ra RAW <<< "$DISPATCH_DIRS"
+            for d in "${RAW[@]}"; do
+              d=$(echo "$d" | xargs)
+              if [[ -f "$d/Dockerfile" ]]; then
+                DIRS+=("$d")
+              else
+                echo "::warning::跳过 '$d'：无 Dockerfile"
+              fi
+            done
+          else
+            mapfile -t DIRS < <(
+              find . -name Dockerfile \
+                -not -path './.git/*' \
+                -not -path '*/node_modules/*' \
+                | sed 's|/Dockerfile||;s|^\./||' | sort
+            )
+          fi
+
+          echo "发布目录 (${#DIRS[@]}):"
+          for d in "${DIRS[@]}"; do echo "  - $d"; done
+
+          if [[ ${#DIRS[@]} -eq 0 ]]; then
+            echo "::warning::没有可发布的目录"
+            echo "matrix=[]" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          JSON="["
+          FIRST=true
+          for d in "${DIRS[@]}"; do
+            if [[ "$FIRST" != "true" ]]; then JSON+=","; fi
+            JSON+="{\"dir\":\"${d}\"}"
+            FIRST=false
+          done
+          JSON+="]"
+          echo "matrix=$(echo "$JSON" | jq -c '.')" >> "$GITHUB_OUTPUT"
+
+  # ── 按目录并行发布：计算版本 → 构建推送 → 打 tag ──
+  release:
+    needs: prepare
+    if: needs.prepare.outputs.matrix != '[]'
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        include: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # 推送 git tag
+      packages: write   # 推送 Docker 镜像
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      # ── 版本计算：auto ──
+      # 使用 TriPSs action 分析 conventional commits，仅计算不创建 tag
+      - name: 自动版本（conventional commits）
+        if: inputs.bump == 'auto'
+        id: auto-ver
+        uses: TriPSs/conventional-changelog-action@v5
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          git-path: ${{ matrix.dir }}/
+          tag-prefix: '${{ matrix.dir }}/v'
+          preset: 'angular'
+          skip-tag: 'true'
+          skip-commit: 'true'
+          skip-version-file: 'true'
+          skip-git-pull: 'true'
+          output-file: 'false'
+
+      # ── 版本计算：手动 ──
+      - name: 手动版本（${{ inputs.bump }}）
+        if: inputs.bump != 'auto'
+        id: manual-ver
+        run: |
+          set -euo pipefail
+
+          dir="${{ matrix.dir }}"
+          bump="${{ inputs.bump }}"
+
+          # 找当前最新 tag
+          latest=$(git tag -l "${dir}/v*" --sort=-v:refname | head -1)
+
+          if [[ -z "$latest" ]]; then
+            new_ver="0.1.0"
+            echo "无历史 tag，起始版本: ${new_ver}"
+          else
+            ver=$(echo "$latest" | grep -oP 'v?\K\d+\.\d+\.\d+')
+            IFS='.' read -r maj min pat <<< "$ver"
+            case "$bump" in
+              major) maj=$((maj+1)); min=0; pat=0 ;;
+              minor) min=$((min+1)); pat=0 ;;
+              patch) pat=$((pat+1)) ;;
+            esac
+            new_ver="${maj}.${min}.${pat}"
+            echo "当前: ${latest} → 新版本: ${new_ver} (${bump})"
+          fi
+
+          echo "clean_version=${new_ver}" >> "$GITHUB_OUTPUT"
+
+      # ── 统一版本号 ──
+      - name: 版本号
+        id: version
+        run: |
+          if [[ "${{ inputs.bump }}" == "auto" ]]; then
+            VER="${{ steps.auto-ver.outputs.clean_version }}"
+          else
+            VER="${{ steps.manual-ver.outputs.clean_version }}"
+          fi
+          IFS='.' read -r MAJ MIN PAT <<< "$VER"
+          echo "  版本: ${VER}  |  major=${MAJ}  minor=${MAJ}.${MIN}"
+          echo "ver=${VER}" >> "$GITHUB_OUTPUT"
+          echo "major_minor=${MAJ}.${MIN}" >> "$GITHUB_OUTPUT"
+          echo "major=${MAJ}" >> "$GITHUB_OUTPUT"
+
+      # ── 镜像名 ──
+      - name: 镜像名
+        id: image-path
+        run: |
+          REG="${{ env.REGISTRY }}"
+          IMG="${{ env.IMAGE_NAME }}"
+          DIR="${{ matrix.dir }}"
+
+          if [[ -z "$DIR" ]]; then SUFFIX="${IMG}"; else SUFFIX="${IMG}/${DIR}"; fi
+
+          # docker.io 不加 registry 前缀
+          if [[ "$REG" == "docker.io" ]]; then FULL_IMAGE="${SUFFIX}"
+          else FULL_IMAGE="${REG}/${SUFFIX}"; fi
+
+          echo "full-image=${FULL_IMAGE}" >> "$GITHUB_OUTPUT"
+          echo "→ ${FULL_IMAGE}"
+
+      # ── 镜像标签 + 元数据（metadata-action，与 build-containers.yml 统一） ──
+      - name: 标签 + 元数据
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ steps.image-path.outputs.full-image }}
+          tags: |
+            type=raw,value=${{ steps.version.outputs.ver }}
+            type=raw,value=${{ steps.version.outputs.major_minor }}
+            type=raw,value=${{ steps.version.outputs.major }}
+            type=raw,value=latest
+            type=sha,prefix=sha-
+          flavor: |
+            latest=false
+
+      # ── 构建 & 推送 ──
+      - name: Registry 登录
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY == 'docker.io' && '' || env.REGISTRY }}
+          username: ${{ env.REGISTRY_USER }}
+          password: ${{ env.REGISTRY_SECRET }}
+
+      - name: Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: 构建 & 推送镜像
+        uses: docker/build-push-action@v7
+        with:
+          context: ${{ matrix.dir || '.' }}
+          file: ${{ matrix.dir || '.' }}/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.dir || '.' }}/Dockerfile
+          cache-to: type=gha,mode=max,scope=${{ matrix.dir || '.' }}/Dockerfile
+
+      # ── 创建 Git tag（构建成功后，仅作记录） ──
+      # 使用 GITHUB_TOKEN 推送 tag 不会触发下游 workflow
+      # 如需 GitOps 路径（tag push 触发 build-containers.yml），使用个人凭据手动推送 tag
+      - name: 创建 Git tag
+        env:
+          DIR: ${{ matrix.dir }}
+          VERSION: ${{ steps.version.outputs.ver }}
+        run: |
+          if [[ -n "$DIR" ]]; then
+            TAG="${DIR}/v${VERSION}"
+          else
+            TAG="v${VERSION}"
+          fi
+          git tag "$TAG"
+          git push origin "$TAG"
+          echo "✅ 已创建 tag: ${TAG}"
