@@ -121,7 +121,7 @@ jobs:
 
           # 匹配变更范围 + 生成 matrix（单次遍历）
           HAS_ANY=false
-          RESULT_JSON="["
+          INCLUDE_JSON="["
           FIRST=true
 
           for df in "${ALL_DOCKERFILES[@]}"; do
@@ -156,21 +156,24 @@ jobs:
               echo "  ✅ $df"
               HAS_ANY=true
               if [[ "$FIRST" != "true" ]]; then
-                RESULT_JSON+=","
+                INCLUDE_JSON+=","
               fi
-              RESULT_JSON+="{\"dockerfile\":\"${df}\",\"dir\":\"${norm_dir}\"}"
+              INCLUDE_JSON+="{\"dockerfile\":\"${df}\",\"dir\":\"${norm_dir}\"}"
               FIRST=false
             else
               echo "  ⏭️  $df"
             fi
           done
 
-          RESULT_JSON+="]"
+          INCLUDE_JSON+="]"
+
+          # 输出 {"include": [...]} 格式，下游可直接 matrix: ${{ fromJSON(...) }}
+          MATRIX_JSON=$(jq -nc --argjson inc "$INCLUDE_JSON" '{include: $inc}')
 
           echo ""
-          echo "→ matrix: $RESULT_JSON"
+          echo "→ matrix: $MATRIX_JSON"
           echo "has-changes=${HAS_ANY}" >> "$GITHUB_OUTPUT"
-          echo "matrix=$(echo "$RESULT_JSON" | jq -c '.')" >> "$GITHUB_OUTPUT"
+          echo "matrix=$MATRIX_JSON" >> "$GITHUB_OUTPUT"
           echo "::endgroup::"
 
   # 并行构建 & 推送 — matrix 消费 detect-changes 的输出
@@ -182,8 +185,7 @@ jobs:
     strategy:
       fail-fast: false
       max-parallel: 4
-      matrix:
-        include: ${{ fromJSON(needs.detect-changes.outputs.matrix) }}
+      matrix: ${{ fromJSON(needs.detect-changes.outputs.matrix) }}
     permissions:
       contents: read
       packages: write

@@ -65,15 +65,15 @@ jobs:
             exit 0
           fi
 
-          JSON="["
+          INC_JSON="["
           FIRST=true
           for d in "${DIRS[@]}"; do
-            if [[ "$FIRST" != "true" ]]; then JSON+=","; fi
-            JSON+="{\"dir\":\"${d}\"}"
+            if [[ "$FIRST" != "true" ]]; then INC_JSON+=","; fi
+            INC_JSON+="{\"dir\":\"${d}\"}"
             FIRST=false
           done
-          JSON+="]"
-          echo "matrix=$(echo "$JSON" | jq -c '.')" >> "$GITHUB_OUTPUT"
+          INC_JSON+="]"
+          echo "matrix=$(jq -nc --argjson inc "$INC_JSON" '{include: $inc}')" >> "$GITHUB_OUTPUT"
 
   # ── 按目录并行发布：计算版本 → 构建推送 → 打 tag ──
   release:
@@ -82,8 +82,7 @@ jobs:
     strategy:
       fail-fast: false
       max-parallel: 4
-      matrix:
-        include: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
     runs-on: ubuntu-latest
     permissions:
       contents: write   # 推送 git tag
