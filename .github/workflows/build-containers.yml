@@ -166,8 +166,6 @@ jobs:
           done
 
           INCLUDE_JSON+="]"
-
-          # 输出 {"include": [...]} 格式，下游可直接 matrix: ${{ fromJSON(...) }}
           MATRIX_JSON=$(jq -nc --argjson inc "$INCLUDE_JSON" '{include: $inc}')
 
           echo ""
