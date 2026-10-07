@@ -100,10 +100,6 @@ RUN ln -sf "$(fnm exec --using=default which node)" /usr/local/bin/node && \
 
 # UV + Python
 COPY --from=builder-uv /usr/local/bin/uv /usr/local/bin/uv
-ENV UV_PYTHON_INSTALL_DIR=/usr/local/python
-RUN uv python install 3.12 && \
-    ln -sf $(uv python find 3.12) /usr/local/bin/python3.12 && \
-    ln -sf $(uv python find 3.12) /usr/local/bin/python3
 
 # chromium
 RUN npx playwright install-deps chromium
