@@ -108,5 +108,12 @@ RUN uv python install 3.12 && \
 # chromium
 RUN npx playwright install-deps chromium
 USER ubuntu
-RUN curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash -s -- --skip-setup --non-interactive
+RUN curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash -s -- --skip-setup --non-interactive --branch v2026.9.24
+RUN hermes config set --force gateway.api_server.enabled true && \
+    hermes config set API_SERVER_HOST 0.0.0.0 && \
+    hermes config set API_SERVER_PORT 8080 && \
+    hermes config set model.provider custom && \
+    hermes config set model.base_url '${HERMES_CUSTOM_BASEURL}' && \
+    hermes config set model.default '${HERMES_CUSTOM_MODEL}' && \
+    hermes config set model.api_key '${HERMES_CUSTOM_API_KEY}'
 WORKDIR /home/ubuntu
