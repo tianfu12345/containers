@@ -254,5 +254,5 @@ jobs:
           push: ${{ steps.push-decision.outputs.should-push }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=${{ matrix.dockerfile }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.dockerfile }}
+          cache-from: type=registry,ref=${{ steps.image-path.outputs.full-image }}:buildcache
+          cache-to: type=registry,ref=${{ steps.image-path.outputs.full-image }}:buildcache,mode=max
