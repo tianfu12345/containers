@@ -205,6 +205,7 @@ jobs:
           else FULL_IMAGE="${REG}/${SUFFIX}"; fi
 
           echo "full-image=${FULL_IMAGE}" >> "$GITHUB_OUTPUT"
+          echo "cache-image=${FULL_IMAGE}-buildcache" >> "$GITHUB_OUTPUT"
           echo "→ ${FULL_IMAGE}"
 
       - name: 标签 + 元数据
@@ -254,5 +255,5 @@ jobs:
           push: ${{ steps.push-decision.outputs.should-push }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=registry,ref=${{ steps.image-path.outputs.full-image }}:buildcache
-          cache-to: type=registry,ref=${{ steps.image-path.outputs.full-image }}:buildcache,mode=max
+          cache-from: type=registry,ref=${{ steps.image-path.outputs.cache-image }}:cache
+          cache-to: type=registry,ref=${{ steps.image-path.outputs.cache-image }}:cache,mode=max
