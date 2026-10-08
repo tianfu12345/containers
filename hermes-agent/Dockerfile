@@ -25,7 +25,8 @@ RUN mkdir -p $HELM_PLUGINS && \
 # Helmfile
 FROM builder AS builder-helmfile
 #ENV HELMFILE_VERSION=v1.5.5
-RUN /scripts/utils.sh download_github_tarball "helmfile/helmfile" "${HELMFILE_VERSION}" "*linux_amd64.tar.gz" "/downloads" "helmfile"
+RUN --mount=type=secret,id=github_token \
+    /scripts/utils.sh download_github_tarball "helmfile/helmfile" "${HELMFILE_VERSION}" "*linux_amd64.tar.gz" "/downloads" "helmfile"
 
 # Kubectl
 FROM builder AS builder-kubectl
@@ -35,7 +36,8 @@ RUN KUBE_STABLE="$(curl -L -s https://dl.k8s.io/release/stable.txt)" && \
 # SOPS
 FROM builder AS builder-sops
 #ENV SOPS_VERSION=v3.13.3
-RUN /scripts/utils.sh download_github_binary "getsops/sops" "${SOPS_VERSION}" "*linux.amd64" "sops"
+RUN --mount=type=secret,id=github_token \
+    /scripts/utils.sh download_github_binary "getsops/sops" "${SOPS_VERSION}" "*linux.amd64" "sops"
 
 # Docker
 FROM builder AS builder-docker

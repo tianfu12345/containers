@@ -257,3 +257,5 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=registry,ref=${{ steps.image-path.outputs.cache-image }}:cache
           cache-to: type=registry,ref=${{ steps.image-path.outputs.cache-image }}:cache,mode=max
+          secrets: |
+            "github_token=${{ secrets.GITHUB_TOKEN }}"

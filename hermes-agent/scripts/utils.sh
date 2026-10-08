@@ -166,13 +166,29 @@ download_zip() {
     log_success "zip 归档解压完成: $output_dir"
 }
 
+# 自动加载 GITHUB_TOKEN — 优先级：env var > BuildKit secret 文件
+# BuildKit secret 通过 --mount=type=secret,id=github_token 注入
+_ensure_github_token() {
+    if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+        return 0
+    fi
+    if [[ -f /run/secrets/github_token ]]; then
+        export GITHUB_TOKEN
+        GITHUB_TOKEN=$(cat /run/secrets/github_token)
+        log_debug "已从 /run/secrets/github_token 加载 GITHUB_TOKEN"
+        return 0
+    fi
+    return 1
+}
+
 # 通过 GitHub API 获取仓库最新 Release tag
 # 用法: _latest_github_tag <repo>
 #   repo - 仓库路径，格式 "owner/repo"（如 "getsops/sops"）
 # 依赖: curl, jq
-# 注意: 未认证 API 限速 60次/小时，设置 GITHUB_TOKEN 环境变量可提升至 5000
+# 注意: 未认证 API 限速 60次/小时，通过 GITHUB_TOKEN 或 BuildKit secret 可提升至 5000
 _latest_github_tag() {
     local repo="$1"
+    _ensure_github_token || true
     local auth_header=()
     if [[ -n "${GITHUB_TOKEN:-}" ]]; then
         auth_header=(-H "Authorization: Bearer $GITHUB_TOKEN")
@@ -197,6 +213,7 @@ _github_release_asset_url() {
     local tag="$2"
     local pattern="$3"
 
+    _ensure_github_token || true
     local auth_header=()
     if [[ -n "${GITHUB_TOKEN:-}" ]]; then
         auth_header=(-H "Authorization: Bearer $GITHUB_TOKEN")
