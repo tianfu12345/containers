@@ -70,7 +70,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
       sed -i -E 's/(archive|security|ports)\.ubuntu\.com/mirrors.tuna.tsinghua.edu.cn/g' /etc/apt/sources.list.d/ubuntu.sources || true && \
     /scripts/utils.sh apt_install \
         bash bash-completion locales ca-certificates sudo \
-        curl wget git gnupg openssh-client \
+        curl wget git gnupg openssh-client openssh-server \
         tar unzip xz-utils bzip2 zstd \
         jq gawk less vim patch \
         htop ncdu tree file tmux ripgrep \
@@ -78,7 +78,8 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         openssl nftables psmisc lsof strace \
         make build-essential \
         ffmpeg \
-        skopeo uidmap && \
+        skopeo uidmap \
+        runit tini && \
     locale-gen zh_CN.UTF-8 en_US.UTF-8
 # 从 Builder 阶段复制工具
 COPY --from=builder-docker /downloads/ /usr/local/bin/
@@ -103,6 +104,10 @@ RUN ln -sf "$(fnm exec --using=default which node)" /usr/local/bin/node && \
 # UV + Python
 COPY --from=builder-uv /usr/local/bin/uv /usr/local/bin/uv
 
+# runit 服务定义
+COPY runit-services/ /etc/service/
+RUN chown -R ubuntu:ubuntu /etc/service/
+
 # chromium
 RUN npx playwright install-deps chromium
 USER ubuntu
@@ -116,3 +121,5 @@ RUN export PATH="/home/ubuntu/.local/bin:$PATH" && \
     hermes config set model.default '${HERMES_CUSTOM_MODEL}' && \
     hermes config set model.api_key '${HERMES_CUSTOM_API_KEY}'
 WORKDIR /home/ubuntu
+
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/bin/runsvdir", "-P", "/etc/service"]

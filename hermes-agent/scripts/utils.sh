@@ -109,6 +109,11 @@ download_tarball() {
     local url="$1"
     local output_dir="$2"
     local extract_path="${3:-}"
+    # 根据扩展名选择压缩标志：.tar.xz/.txz → xz，其余 → gzip
+    local tar_flag="-zx"
+    if [[ "$url" =~ \.(tar\.xz|txz)(\?|$) ]]; then
+        tar_flag="-Jx"
+    fi
     mkdir -p "$output_dir"
     if [[ -n "$extract_path" ]]; then
         # 计算需要剥离的目录层级
@@ -119,16 +124,16 @@ download_tarball() {
         if [[ "$extract_path" == */ ]]; then
             # 提取目录：剥离层级，目录内容直接落到 output_dir
             log_progress "正在下载并提取目录: $extract_path (剥离 $strip_count 层)"
-            curl -fL "$url" | tar -xz -C "$output_dir" --strip-components="$strip_count" "$extract_path"
+            curl -fL "$url" | tar "${tar_flag}" -C "$output_dir" --strip-components="$strip_count" "$extract_path"
         else
             # 提取文件：剥离父目录层级，文件直接落到 output_dir
             log_progress "正在下载并提取文件: $(basename "$extract_path") (剥离 $strip_count 层)"
-            curl -fL "$url" | tar -xz -C "$output_dir" --strip-components="$strip_count" "$extract_path"
+            curl -fL "$url" | tar "${tar_flag}" -C "$output_dir" --strip-components="$strip_count" "$extract_path"
             chmod +x "${output_dir}/$(basename "$extract_path")"
         fi
     else
         log_progress "正在下载并提取归档到: $output_dir"
-        curl -fL "$url" | tar -xz -C "$output_dir"
+        curl -fL "$url" | tar "${tar_flag}" -C "$output_dir"
     fi
     log_success "归档提取完成: $output_dir"
 }

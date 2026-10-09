@@ -1,0 +1,13 @@
+#!/bin/sh
+HOST_KEY_DIR="/home/ubuntu/.ssh"
+if [ ! -f "$HOST_KEY_DIR/ssh_host_ed25519_key" ]; then
+  ssh-keygen -t rsa -f "$HOST_KEY_DIR/ssh_host_rsa_key" -N "" -q
+  ssh-keygen -t ecdsa -f "$HOST_KEY_DIR/ssh_host_ecdsa_key" -N "" -q
+  ssh-keygen -t ed25519 -f "$HOST_KEY_DIR/ssh_host_ed25519_key" -N "" -q
+fi
+exec /usr/sbin/sshd -D -e -p 2222 \
+  -o "HostKey $HOST_KEY_DIR/ssh_host_rsa_key" \
+  -o "HostKey $HOST_KEY_DIR/ssh_host_ecdsa_key" \
+  -o "HostKey $HOST_KEY_DIR/ssh_host_ed25519_key" \
+  -o "UsePAM no" \
+  -o "PasswordAuthentication no"
