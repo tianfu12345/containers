@@ -6,8 +6,6 @@ COPY scripts /scripts
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
     chmod +x /scripts/utils.sh && \
-    grep -q 'archive.ubuntu.com' /etc/apt/sources.list.d/ubuntu.sources && \
-      sed -i -E 's/(archive|security|ports)\.ubuntu\.com/mirrors.tuna.tsinghua.edu.cn/g' /etc/apt/sources.list.d/ubuntu.sources || true && \
     /scripts/utils.sh apt_install curl wget unzip tar ca-certificates git jq
 WORKDIR /downloads
 
