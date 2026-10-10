@@ -116,6 +116,9 @@ RUN export PATH="/home/ubuntu/.local/bin:$PATH" && \
     hermes config set model.base_url '${HERMES_CUSTOM_BASEURL}' && \
     hermes config set model.default '${HERMES_CUSTOM_MODEL}' && \
     hermes config set model.api_key '${HERMES_CUSTOM_API_KEY}'
+RUN hermes plugins install openviking --no-enable && \
+    hermes config set memory.provider openviking
+
 WORKDIR /home/ubuntu
 
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/bin/runsvdir", "-P", "/etc/service"]
