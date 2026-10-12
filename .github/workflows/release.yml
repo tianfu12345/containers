@@ -101,9 +101,10 @@ jobs:
         uses: TriPSs/conventional-changelog-action@v5
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          git-path: ${{ matrix.dir }}/
-          tag-prefix: '${{ matrix.dir }}/v'
+          git-path: ${{ matrix.dir != '' && format('{0}/', matrix.dir) || '.' }}
+          tag-prefix: ${{ matrix.dir != '' && format('{0}/v', matrix.dir) || 'v' }}
           preset: 'conventionalcommits'
+          git-push: 'false'
           skip-tag: 'true'
           skip-commit: 'true'
           skip-version-file: 'true'
@@ -120,14 +121,16 @@ jobs:
           dir="${{ matrix.dir }}"
           bump="${{ inputs.bump }}"
 
-          # 找当前最新 tag
-          latest=$(git tag -l "${dir}/v*" --sort=-v:refname | head -1)
+          # 找当前最新 tag（空目录 = 仓库根目录，tag 前缀为 v*）
+          if [[ -n "$dir" ]]; then PAT="${dir}/v*"; else PAT="v*"; fi
+          latest=$(git tag -l "$PAT" --sort=-v:refname | head -1)
 
           if [[ -z "$latest" ]]; then
             new_ver="0.1.0"
             echo "无历史 tag，起始版本: ${new_ver}"
           else
-            ver=$(echo "$latest" | grep -oP 'v?\K\d+\.\d+\.\d+')
+            # 取最后一个 x.y.z（目录名里若含版本片段也能正确取到 tag 末尾的版本）
+            ver=$(grep -oP '\d+\.\d+\.\d+' <<< "$latest" | tail -1)
             IFS='.' read -r maj min pat <<< "$ver"
             case "$bump" in
               major) maj=$((maj+1)); min=0; pat=0 ;;
@@ -219,6 +222,8 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=registry,ref=${{ steps.image-path.outputs.cache-image }}:cache
           cache-to: type=registry,ref=${{ steps.image-path.outputs.cache-image }}:cache,mode=max
+          secrets: |
+            "github_token=${{ secrets.GITHUB_TOKEN }}"
 
       # ── 创建 Git tag（构建成功后，仅作记录） ──
       # 使用 GITHUB_TOKEN 推送 tag 不会触发下游 workflow

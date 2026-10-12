@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       directories:
-        description: '要构建的目录（逗号分隔），留空按变更检测'
+        description: '要构建的目录（逗号分隔），留空则构建全部'
         required: false
         type: string
       force_all:
