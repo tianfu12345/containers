@@ -1,0 +1,5 @@
+#!/bin/sh
+/home/ubuntu/.local/bin/hermes config set HERMES_CUSTOM_API_KEY ${HERMES_CUSTOM_API_KEY}
+/home/ubuntu/.local/bin/hermes config set HERMES_CUSTOM_BASEURL ${HERMES_CUSTOM_BASEURL}
+/home/ubuntu/.local/bin/hermes config set HERMES_CUSTOM_MODEL ${HERMES_CUSTOM_MODEL}
+exec /home/ubuntu/.local/bin/hermes gateway run

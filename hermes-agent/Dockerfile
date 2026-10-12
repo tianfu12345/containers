@@ -6,8 +6,6 @@ COPY scripts /scripts
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
     chmod +x /scripts/utils.sh && \
-    grep -q 'archive.ubuntu.com' /etc/apt/sources.list.d/ubuntu.sources && \
-      sed -i -E 's/(archive|security|ports)\.ubuntu\.com/mirrors.tuna.tsinghua.edu.cn/g' /etc/apt/sources.list.d/ubuntu.sources || true && \
     /scripts/utils.sh apt_install curl wget unzip tar ca-certificates git jq
 WORKDIR /downloads
 
@@ -25,7 +23,8 @@ RUN mkdir -p $HELM_PLUGINS && \
 # Helmfile
 FROM builder AS builder-helmfile
 #ENV HELMFILE_VERSION=v1.5.5
-RUN /scripts/utils.sh download_github_tarball "helmfile/helmfile" "${HELMFILE_VERSION}" "*linux_amd64.tar.gz" "/downloads" "helmfile"
+RUN --mount=type=secret,id=github_token \
+    /scripts/utils.sh download_github_tarball "helmfile/helmfile" "${HELMFILE_VERSION}" "*linux_amd64.tar.gz" "/downloads" "helmfile"
 
 # Kubectl
 FROM builder AS builder-kubectl
@@ -35,7 +34,8 @@ RUN KUBE_STABLE="$(curl -L -s https://dl.k8s.io/release/stable.txt)" && \
 # SOPS
 FROM builder AS builder-sops
 #ENV SOPS_VERSION=v3.13.3
-RUN /scripts/utils.sh download_github_binary "getsops/sops" "${SOPS_VERSION}" "*linux.amd64" "sops"
+RUN --mount=type=secret,id=github_token \
+    /scripts/utils.sh download_github_binary "getsops/sops" "${SOPS_VERSION}" "*linux.amd64" "sops"
 
 # Docker
 FROM builder AS builder-docker
@@ -64,11 +64,9 @@ COPY scripts /scripts
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
     chmod +x /scripts/utils.sh && \
-    grep -q 'archive.ubuntu.com' /etc/apt/sources.list.d/ubuntu.sources && \
-      sed -i -E 's/(archive|security|ports)\.ubuntu\.com/mirrors.tuna.tsinghua.edu.cn/g' /etc/apt/sources.list.d/ubuntu.sources || true && \
     /scripts/utils.sh apt_install \
         bash bash-completion locales ca-certificates sudo \
-        curl wget git gnupg openssh-client \
+        curl wget git gnupg openssh-client openssh-server \
         tar unzip xz-utils bzip2 zstd \
         jq gawk less vim patch \
         htop ncdu tree file tmux ripgrep \
@@ -76,7 +74,8 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         openssl nftables psmisc lsof strace \
         make build-essential \
         ffmpeg \
-        skopeo uidmap && \
+        skopeo uidmap \
+        runit tini && \
     locale-gen zh_CN.UTF-8 en_US.UTF-8
 # 从 Builder 阶段复制工具
 COPY --from=builder-docker /downloads/ /usr/local/bin/
@@ -98,15 +97,27 @@ RUN ln -sf "$(fnm exec --using=default which node)" /usr/local/bin/node && \
     ln -sf "$(fnm exec --using=default which npm)" /usr/local/bin/npm && \
     ln -sf "$(fnm exec --using=default which npx)" /usr/local/bin/npx
 
-# UV + Python
+# UV
 COPY --from=builder-uv /usr/local/bin/uv /usr/local/bin/uv
-ENV UV_PYTHON_INSTALL_DIR=/usr/local/python
-RUN uv python install 3.12 && \
-    ln -sf $(uv python find 3.12) /usr/local/bin/python3.12 && \
-    ln -sf $(uv python find 3.12) /usr/local/bin/python3
 
 # chromium
 RUN npx playwright install-deps chromium
 USER ubuntu
-RUN curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash -s -- --skip-setup --non-interactive
+RUN curl -fsSL https://github.com/NousResearch/hermes-agent/raw/refs/tags/v2026.9.24/scripts/install.sh | bash -s -- --skip-setup --non-interactive
+RUN export PATH="/home/ubuntu/.local/bin:$PATH" && \
+    hermes config set --force gateway.api_server.enabled true && \
+    hermes config set API_SERVER_HOST 0.0.0.0 && \
+    hermes config set API_SERVER_PORT 8080 && \
+    hermes config set model.provider custom && \
+    hermes config set model.base_url '${HERMES_CUSTOM_BASEURL}' && \
+    hermes config set model.default '${HERMES_CUSTOM_MODEL}' && \
+    hermes config set model.api_key '${HERMES_CUSTOM_API_KEY}' && \
+    hermes plugins install openviking --no-enable && \
+    hermes config set memory.provider openviking
+
+# runit 服务定义
+COPY runit-services/ /etc/service/
+
 WORKDIR /home/ubuntu
+
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/bin/runsvdir", "-P", "/etc/service"]

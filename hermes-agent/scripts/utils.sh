@@ -109,6 +109,11 @@ download_tarball() {
     local url="$1"
     local output_dir="$2"
     local extract_path="${3:-}"
+    # 根据扩展名选择压缩标志：.tar.xz/.txz → xz，其余 → gzip
+    local tar_flag="-zx"
+    if [[ "$url" =~ \.(tar\.xz|txz)(\?|$) ]]; then
+        tar_flag="-Jx"
+    fi
     mkdir -p "$output_dir"
     if [[ -n "$extract_path" ]]; then
         # 计算需要剥离的目录层级
@@ -119,16 +124,16 @@ download_tarball() {
         if [[ "$extract_path" == */ ]]; then
             # 提取目录：剥离层级，目录内容直接落到 output_dir
             log_progress "正在下载并提取目录: $extract_path (剥离 $strip_count 层)"
-            curl -fL "$url" | tar -xz -C "$output_dir" --strip-components="$strip_count" "$extract_path"
+            curl -fL "$url" | tar "${tar_flag}" -C "$output_dir" --strip-components="$strip_count" "$extract_path"
         else
             # 提取文件：剥离父目录层级，文件直接落到 output_dir
             log_progress "正在下载并提取文件: $(basename "$extract_path") (剥离 $strip_count 层)"
-            curl -fL "$url" | tar -xz -C "$output_dir" --strip-components="$strip_count" "$extract_path"
+            curl -fL "$url" | tar "${tar_flag}" -C "$output_dir" --strip-components="$strip_count" "$extract_path"
             chmod +x "${output_dir}/$(basename "$extract_path")"
         fi
     else
         log_progress "正在下载并提取归档到: $output_dir"
-        curl -fL "$url" | tar -xz -C "$output_dir"
+        curl -fL "$url" | tar "${tar_flag}" -C "$output_dir"
     fi
     log_success "归档提取完成: $output_dir"
 }
@@ -166,13 +171,29 @@ download_zip() {
     log_success "zip 归档解压完成: $output_dir"
 }
 
+# 自动加载 GITHUB_TOKEN — 优先级：env var > BuildKit secret 文件
+# BuildKit secret 通过 --mount=type=secret,id=github_token 注入
+_ensure_github_token() {
+    if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+        return 0
+    fi
+    if [[ -f /run/secrets/github_token ]]; then
+        export GITHUB_TOKEN
+        GITHUB_TOKEN=$(cat /run/secrets/github_token)
+        log_debug "已从 /run/secrets/github_token 加载 GITHUB_TOKEN"
+        return 0
+    fi
+    return 1
+}
+
 # 通过 GitHub API 获取仓库最新 Release tag
 # 用法: _latest_github_tag <repo>
 #   repo - 仓库路径，格式 "owner/repo"（如 "getsops/sops"）
 # 依赖: curl, jq
-# 注意: 未认证 API 限速 60次/小时，设置 GITHUB_TOKEN 环境变量可提升至 5000
+# 注意: 未认证 API 限速 60次/小时，通过 GITHUB_TOKEN 或 BuildKit secret 可提升至 5000
 _latest_github_tag() {
     local repo="$1"
+    _ensure_github_token || true
     local auth_header=()
     if [[ -n "${GITHUB_TOKEN:-}" ]]; then
         auth_header=(-H "Authorization: Bearer $GITHUB_TOKEN")
@@ -197,6 +218,7 @@ _github_release_asset_url() {
     local tag="$2"
     local pattern="$3"
 
+    _ensure_github_token || true
     local auth_header=()
     if [[ -n "${GITHUB_TOKEN:-}" ]]; then
         auth_header=(-H "Authorization: Bearer $GITHUB_TOKEN")
