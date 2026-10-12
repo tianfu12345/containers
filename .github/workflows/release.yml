@@ -103,7 +103,7 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           git-path: ${{ matrix.dir }}/
           tag-prefix: '${{ matrix.dir }}/v'
-          preset: 'angular'
+          preset: 'conventionalcommits'
           skip-tag: 'true'
           skip-commit: 'true'
           skip-version-file: 'true'
@@ -144,13 +144,23 @@ jobs:
       - name: 版本号
         id: version
         run: |
+          auto_version=""
           if [[ "${{ inputs.bump }}" == "auto" ]]; then
-            VER="${{ steps.auto-ver.outputs.clean_version }}"
-          else
-            VER="${{ steps.manual-ver.outputs.clean_version }}"
+            auto_version="${{ steps.auto-ver.outputs.version }}"
+            skipped="${{ steps.auto-ver.outputs.skipped }}"
           fi
+
+          if [[ "${{ inputs.bump }}" != "auto" ]]; then
+            VER="${{ steps.manual-ver.outputs.clean_version }}"
+          elif [[ "$auto_version" != "true" && -n "$auto_version" ]]; then
+            VER="$auto_version"
+          else
+            echo "::error::自动版本计算失败（无版本变化或无 tag 历史），请改用手动 bump 或检查 conventional commits"
+            exit 1
+          fi
+          [[ -z "$VER" ]] && { echo "::error::版本号为空"; exit 1; }
           IFS='.' read -r MAJ MIN PAT <<< "$VER"
-          echo "  版本: ${VER}  |  major=${MAJ}  minor=${MAJ}.${MIN}"
+          echo "  版本: ${VER}  |  major=${MAJ}  minor=${MIN}"
           echo "ver=${VER}" >> "$GITHUB_OUTPUT"
           echo "major_minor=${MAJ}.${MIN}" >> "$GITHUB_OUTPUT"
           echo "major=${MAJ}" >> "$GITHUB_OUTPUT"
