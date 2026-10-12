@@ -180,6 +180,7 @@ jobs:
           else FULL_IMAGE="${REG}/${SUFFIX}"; fi
 
           echo "full-image=${FULL_IMAGE}" >> "$GITHUB_OUTPUT"
+          echo "cache-image=${FULL_IMAGE}-buildcache" >> "$GITHUB_OUTPUT"
           echo "→ ${FULL_IMAGE}"
 
       # ── 镜像标签 + 元数据（metadata-action，与 build-containers.yml 统一） ──
@@ -216,8 +217,8 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=${{ matrix.dir || '.' }}/Dockerfile
-          cache-to: type=gha,mode=max,scope=${{ matrix.dir || '.' }}/Dockerfile
+          cache-from: type=registry,ref=${{ steps.image-path.outputs.cache-image }}:cache
+          cache-to: type=registry,ref=${{ steps.image-path.outputs.cache-image }}:cache,mode=max
 
       # ── 创建 Git tag（构建成功后，仅作记录） ──
       # 使用 GITHUB_TOKEN 推送 tag 不会触发下游 workflow
