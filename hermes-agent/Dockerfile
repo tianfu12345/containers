@@ -116,7 +116,7 @@ RUN export PATH="/home/ubuntu/.local/bin:$PATH" && \
     hermes config set memory.provider openviking
 
 # runit 服务定义
-COPY runit-services/ /etc/service/
+COPY --chown=1000:1000 runit-services/ /etc/service/
 
 WORKDIR /home/ubuntu
 
