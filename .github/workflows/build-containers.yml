@@ -1,4 +1,4 @@
-name: Monorepo 容器镜像构建
+name: 构建容器镜像
 
 on:
   push:
@@ -22,7 +22,7 @@ on:
         default: false
 
 env:
-  # 目标 registry：ghcr.io（默认）/ docker.io / gitea.example.com
+  # 目标 registry（默认 ghcr.io）
   REGISTRY: ${{ vars.REGISTRY || 'ghcr.io' }}
   # 镜像命名空间：默认取仓库 owner
   IMAGE_NAME: ${{ vars.IMAGE_NAME || github.repository_owner }}
@@ -42,9 +42,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      # tj-actions 全家桶有过供应链事件，用加固版 step-security 镜像（行为兼容）；
-      # 自动排除 .gitignore 路径与 node_modules（vendor 未使用，无需排除）；
-      # 直接返回 Dockerfile 文件路径（下游“匹配 → matrix”自行取 dirname）
+      # 加固版 step-security 镜像（tj-actions 全家桶有供应链事件）；自动排除 .gitignore
+      # 与 node_modules；返回 Dockerfile 文件路径，下游自行取 dirname
       - name: 扫描 Dockerfile
         id: glob
         uses: step-security/tj-actions-glob@v22
@@ -52,7 +51,7 @@ jobs:
           files: |
             **/Dockerfile
 
-      # paths → /tmp/dockerfiles.json（相对路径，供“匹配 → matrix”步骤消费）
+      # paths → /tmp/dockerfiles.json（相对路径，供下游步骤消费）
       - name: 整理 Dockerfile 列表
         id: discover
         run: |
@@ -63,7 +62,7 @@ jobs:
             echo "count=0" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          # tj-actions/glob 输出相对路径；绝对路径兜底：剥掉 workspace 前缀
+          # 归一为相对路径后写入 JSON
           PATHS="${PATHS//${GITHUB_WORKSPACE}\//}"
           printf '%s\n' $PATHS | jq -R . | jq -s -c . > /tmp/dockerfiles.json
           COUNT=$(jq length /tmp/dockerfiles.json)
@@ -71,7 +70,7 @@ jobs:
           for df in $(jq -r '.[]' /tmp/dockerfiles.json); do echo "  - $df"; done
           echo "count=${COUNT}" >> "$GITHUB_OUTPUT"
 
-      - name: 变更检测 (push/PR)
+      - name: 变更检测（push/PR）
         if: steps.discover.outputs.count != '0' && github.event_name != 'workflow_dispatch'
         uses: dorny/paths-filter@v3
         id: changes
@@ -81,7 +80,7 @@ jobs:
             all:
               - '**'
 
-      - name: 匹配 → matrix
+      - name: 变更匹配 → matrix
         if: steps.discover.outputs.count != '0'
         id: set-matrix
         env:
@@ -103,7 +102,7 @@ jobs:
           if [[ "$TRIGGER" == "workflow_dispatch" ]]; then
             if [[ "$FORCE_ALL" == "true" ]]; then
               FORCE_ALL_BUILD=true
-              echo "模式: force_all"
+              echo "模式: 强制全部"
             elif [[ -n "$DISPATCH_DIRS" ]]; then
               IFS=',' read -ra DESIRED <<< "$DISPATCH_DIRS"
               FILTERED=()

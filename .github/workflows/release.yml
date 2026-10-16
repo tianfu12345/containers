@@ -1,4 +1,4 @@
-name: Release（独立版本发布 + 镜像构建）
+name: 发布容器镜像
 
 on:
   workflow_dispatch:
@@ -30,10 +30,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      # tj-actions 全家桶有过供应链事件，用加固版 step-security 镜像（行为兼容）；
-      # 自动排除 .gitignore 路径与 node_modules；返回 Dockerfile 文件路径，
-      # 目录在下一步取 dirname（match-directories 对文件尾模式无效，不设置）
-      - name: 扫描 Dockerfile 目录
+      # 加固版 step-security 镜像（tj-actions 全家桶有供应链事件）；自动排除 .gitignore 与
+      # node_modules；返回 Dockerfile 文件路径，目录在下一步取 dirname
+      - name: 扫描 Dockerfile
         id: glob
         uses: step-security/tj-actions-glob@v22
         with:
@@ -105,7 +104,7 @@ jobs:
 
       # ── 版本计算：auto ──
       # 使用 TriPSs action 分析 conventional commits，仅计算不创建 tag
-      - name: 自动版本（conventional commits）
+      - name: 自动版本
         if: inputs.bump == 'auto'
         id: auto-ver
         uses: TriPSs/conventional-changelog-action@v5
@@ -168,7 +167,7 @@ jobs:
           elif [[ "$auto_version" != "true" && -n "$auto_version" ]]; then
             VER="$auto_version"
           else
-            echo "::error::自动版本计算失败（无版本变化或无 tag 历史），请改用手动 bump 或检查 conventional commits"
+            echo "::error::自动版本计算失败（无版本变化或无 tag 历史），改用手动 bump"
             exit 1
           fi
           [[ -z "$VER" ]] && { echo "::error::版本号为空"; exit 1; }
@@ -196,7 +195,7 @@ jobs:
           echo "cache-image=${FULL_IMAGE}-buildcache" >> "$GITHUB_OUTPUT"
           echo "→ ${FULL_IMAGE}"
 
-      # ── 镜像标签 + 元数据（metadata-action，与 build-containers.yml 统一） ──
+      # ── 镜像标签 + 元数据（与 build-containers.yml 统一） ──
       - name: 标签 + 元数据
         id: meta
         uses: docker/metadata-action@v6
@@ -235,9 +234,8 @@ jobs:
           secrets: |
             "github_token=${{ secrets.GITHUB_TOKEN }}"
 
-      # ── 创建 Git tag（构建成功后，仅作记录） ──
-      # 使用 GITHUB_TOKEN 推送 tag 不会触发下游 workflow
-      # 如需 GitOps 路径（tag push 触发 build-containers.yml），使用个人凭据手动推送 tag
+      # ── 创建 Git tag（仅作记录）──
+      # GITHUB_TOKEN 推送不触发下游 workflow；GitOps 触发需个人凭据手动推送
       - name: 创建 Git tag
         env:
           DIR: ${{ matrix.dir }}
