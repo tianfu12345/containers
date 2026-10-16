@@ -1,0 +1,20 @@
+apiVersion: v2
+name: hermes-agent
+description: Helm chart for the custom hermes-agent container (gateway API :8080 + sshd :2222, runit/tini multi-process) with an OpenViking RAG memory backend, built on the bjw-s common library
+type: application
+version: 0.4.0
+appVersion: "v2026.9.24"
+keywords:
+  - hermes
+  - ai
+  - agent
+home: https://github.com/NousResearch/hermes-agent
+maintainers:
+  - name: truecloud
+# 依赖 bjw-s `common` 库（library）：
+# templates/common.yaml 里 loader.init → hardcodedValues（业务结构骨架，引用 values.yaml 业务键）
+# → mergeOverwrite → loader.generate。渲染在父 chart 上下文进行，直接读 .Values
+dependencies:
+  - name: common
+    version: "5.3.0"
+    repository: "oci://ghcr.io/bjw-s-labs/helm"

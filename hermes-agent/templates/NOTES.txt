@@ -1,0 +1,94 @@
+{{- /* NOTES.txt：对象名全部动态计算，与渲染路径同一命名规则（fullname + identifier，
+受 forceRename / prefix / suffix / alwaysAppendIdentifierToResourceName 与启用数量影响）。
+渲染时机：NOTES.txt 在 common.yaml 之后（helm 按文件名字母逆序渲染），.Values 已为合并后状态。 */ -}}
+
+{{- /* 启用项计数（无 enabled 键 = 启用；enabled:false 剔除）——同名规则需要 */ -}}
+{{- define "hermes-notes.enabledCount" -}}
+  {{- $n := 0 -}}
+  {{- range $k, $v := index . "items" -}}
+    {{- if and (kindIs "map" $v) (or (not (hasKey $v "enabled")) $v.enabled) -}}
+      {{- $n = add $n 1 -}}
+    {{- end -}}
+  {{- end -}}
+  {{- $n -}}
+{{- end -}}
+
+{{- /* 对象名计算：与渲染路径同一个命名 helper。
+注意：helper 内部算 fullname 不做模板求值，而 NOTES 的 .Values 是原始模板串 ——
+先对 nameOverride/fullnameOverride 求值再调用。 */ -}}
+{{- define "hermes-notes.names" -}}
+  {{- $rawCtx := index . "ctx" -}}
+  {{- $nameOverride := include "bjw-s.common.lib.common.renderString" (dict "value" ((dig "global" "nameOverride" "" $rawCtx.Values) | default "" | toString) "rootContext" $rawCtx) -}}
+  {{- $fullnameOverride := include "bjw-s.common.lib.common.renderString" (dict "value" ((dig "global" "fullnameOverride" "" $rawCtx.Values) | default "" | toString) "rootContext" $rawCtx) -}}
+  {{- $ctx := mergeOverwrite (deepCopy $rawCtx) (dict "Values" (mergeOverwrite (deepCopy $rawCtx.Values) (dict "global" (mergeOverwrite (deepCopy $rawCtx.Values.global) (dict "nameOverride" $nameOverride "fullnameOverride" $fullnameOverride))))) -}}
+  {{- $fullname := include "bjw-s.common.lib.chart.names.fullname" $ctx -}}
+
+  {{- $ctlCount := include "hermes-notes.enabledCount" (dict "items" $ctx.Values.controllers) | int -}}
+  {{- $svcCount := include "hermes-notes.enabledCount" (dict "items" $ctx.Values.service) | int -}}
+  {{- $secCount := include "hermes-notes.enabledCount" (dict "items" $ctx.Values.secrets) | int -}}
+
+  {{- $sts := dict -}}
+  {{- range $id, $v := $ctx.Values.controllers -}}
+    {{- if and (kindIs "map" $v) (or (not (hasKey $v "enabled")) $v.enabled) -}}
+      {{- $_ := set $sts $id (include "bjw-s.common.lib.determineResourceNameFromValues" (dict "rootContext" $ctx "id" $id "values" $v "itemCount" $ctlCount)) -}}
+    {{- end -}}
+  {{- end -}}
+
+  {{- $svcs := dict -}}
+  {{- range $id, $v := $ctx.Values.service -}}
+    {{- if and (kindIs "map" $v) (or (not (hasKey $v "enabled")) $v.enabled) -}}
+      {{- $_ := set $svcs $id (include "bjw-s.common.lib.determineResourceNameFromValues" (dict "rootContext" $ctx "id" $id "values" $v "itemCount" $svcCount)) -}}
+    {{- end -}}
+  {{- end -}}
+
+  {{- $secs := dict -}}
+  {{- range $id, $v := $ctx.Values.secrets -}}
+    {{- if and (kindIs "map" $v) (or (not (hasKey $v "enabled")) $v.enabled) -}}
+      {{- $_ := set $secs $id (include "bjw-s.common.lib.determineResourceNameFromValues" (dict "rootContext" $ctx "id" $id "values" $v "itemCount" $secCount)) -}}
+    {{- end -}}
+  {{- end -}}
+
+  {{- toJson (dict "fullname" $fullname "sts" $sts "svcs" $svcs "secs" $secs) -}}
+{{- end -}}
+
+{{- $names := include "hermes-notes.names" (dict "ctx" $) | fromJson -}}
+{{- $sts := $names.sts -}}
+{{- $svcs := $names.svcs -}}
+{{- $secs := $names.secs -}}
+{{ $.Chart.Name }} 已部署完成。
+
+组件（StatefulSet）：
+{{- range $id, $n := $sts }}
+  - {{ $n }}  ({{ $id }}){{- if eq $id "hermes" }}  gateway HTTP API :8080 + sshd :2222{{- else if eq $id "openviking" }}  记忆/RAG 后端 :1933{{- end }}
+{{- end }}
+
+────────────────────────────────────────────────────────
+访问方式（ClusterIP，用 port-forward 即可）：
+{{- if hasKey $svcs "hermes" }}
+  API:
+    kubectl -n {{ $.Release.Namespace }} port-forward svc/{{ index $svcs "hermes" }} 127.0.0.1:8080:8080
+
+  SSH:
+    kubectl -n {{ $.Release.Namespace }} port-forward svc/{{ index $svcs "hermes" }} 127.0.0.1:2222:22
+    ssh -p 2222 ubuntu@127.0.0.1        # 首次请先将公钥写入 pod 内 ~/.ssh/authorized_keys
+{{- end }}
+{{- if hasKey $svcs "openviking" }}
+  OpenViking:
+    kubectl -n {{ $.Release.Namespace }} port-forward svc/{{ index $svcs "openviking" }} 127.0.0.1:1933:1933
+{{- end }}
+
+密钥取回方式：
+{{- if hasKey $secs "env" }}
+  网关 API key:   kubectl -n {{ $.Release.Namespace }} get secret {{ index $secs "env" }} \
+                    -o jsonpath='{.data.API_SERVER_KEY}' | base64 -d
+  模型 API key:   {{ index $secs "env" }}                   (.data.HERMES_CUSTOM_API_KEY)
+{{- end }}
+{{- if hasKey $secs "openviking-env" }}
+  OpenViking root: {{ index $secs "openviking-env" }}       (.data.OPENVIKING_ROOT_API_KEY)
+{{- end }}
+
+检查状态：
+  kubectl -n {{ $.Release.Namespace }} get pods -l app.kubernetes.io/instance={{ $.Release.Name }}
+{{- range $id, $n := $sts }}
+  kubectl -n {{ $.Release.Namespace }} logs sts/{{ $n }}
+{{- end }}

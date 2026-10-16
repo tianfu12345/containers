@@ -21,17 +21,28 @@ env:
   REGISTRY_SECRET: ${{ secrets.DOCKER_PASSWORD || secrets.GITHUB_TOKEN }}
 
 jobs:
-  # ── 准备 matrix：扫描目录 → JSON 列表 ──
+  # ── 准备 matrix：扫描 Dockerfile 目录 → JSON 列表 ──
   prepare:
     runs-on: ubuntu-latest
     outputs:
-      matrix: ${{ steps.set.outputs.matrix }}
+      matrix: ${{ steps.matrix.outputs.matrix }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
+      # tj-actions 全家桶有过供应链事件，用加固版 step-security 镜像（行为兼容）；
+      # 自动排除 .gitignore 路径与 node_modules，
+      # match-directories 返回含 Dockerfile 的目录本身
+      - name: 扫描 Dockerfile 目录
+        id: glob
+        uses: step-security/tj-actions-glob@v1
+        with:
+          files: |
+            **/Dockerfile
+          match-directories: true
+
       - name: 确定发布目录
-        id: set
+        id: matrix
         env:
           DISPATCH_DIRS: ${{ inputs.directories || '' }}
         run: |
@@ -48,12 +59,10 @@ jobs:
               fi
             done
           else
-            mapfile -t DIRS < <(
-              find . -name Dockerfile \
-                -not -path './.git/*' \
-                -not -path '*/node_modules/*' \
-                | sed 's|/Dockerfile||;s|^\./||' | sort
-            )
+            PATHS="${{ steps.glob.outputs.paths }}"
+            # tj-actions/glob 输出相对路径；绝对路径兜底：剥掉 workspace 前缀
+            PATHS="${PATHS//${GITHUB_WORKSPACE}\//}"
+            read -ra DIRS <<< "$PATHS"
           fi
 
           echo "发布目录 (${#DIRS[@]}):"

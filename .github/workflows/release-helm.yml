@@ -1,0 +1,170 @@
+name: Release Helm Charts（Chart.yaml 版本 → OCI 发布）
+
+# 独立于 release.yml（Docker 镜像）的 chart 发布流程：
+# 手动触发 → 扫描所有含 Chart.yaml 的目录 → 版本号取自各 Chart.yaml 的 version
+# 字段 → 目标仓库已存在同名 tag 的版本在矩阵生成时直接过滤，不进入发布队列
+# → 只发布 OCI 格式（无 tgz 产物上传）。不打 git tag（避免与 Docker 镜像 tag 混淆）
+#
+# 依赖（charts/ 目录被 .gitignore 排除，不入库）每次构建时从 OCI 拉取重建。
+
+on:
+  workflow_dispatch:
+    inputs:
+      directories:
+        description: '要发布的 chart 目录（逗号分隔，相对仓库根），留空则扫描全部含 Chart.yaml 的目录'
+        required: false
+        type: string
+
+env:
+  REGISTRY: ${{ vars.REGISTRY || 'ghcr.io' }}
+  # 与 IMAGE_NAME 语义一致：仅定义 chart 存放路径，不含 REGISTRY 地址，
+  # 始终推送到 REGISTRY 之下（oci://REGISTRY/OCI_CHART_REPO[/chart目录]）
+  # 跨组织/跨仓库推送需要具备相应权限的 PAT（GITHUB_TOKEN 的 packages: write 仅覆盖本仓库）
+  OCI_CHART_REPO: ${{ vars.OCI_CHART_REPO || format('{0}/helm-charts', github.repository_owner) }}
+  REGISTRY_USER: ${{ vars.DOCKER_USER || github.actor }}
+  REGISTRY_SECRET: ${{ secrets.DOCKER_PASSWORD || secrets.GITHUB_TOKEN }}
+
+jobs:
+  # ── 准备 matrix：扫描 Chart.yaml 目录 → 矩阵（含各 Chart.yaml 版本号）──
+  prepare:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read   # 重复版本探测（helm pull）
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      # tj-actions 全家桶有过供应链事件，用加固版 step-security 镜像（行为兼容）；
+      # 自动排除 .gitignore 路径（charts/、dist/），match-directories 返回目录本身
+      - name: 扫描 Chart 目录
+        id: glob
+        uses: step-security/tj-actions-glob@v1
+        with:
+          files: |
+            **/Chart.yaml
+          match-directories: true
+
+      - name: 安装 helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.22.0
+
+      # 只读探测目标仓库，GITHUB_TOKEN 的 packages: read 足够
+      - name: Registry 登录（探测）
+        run: |
+          echo "${{ env.REGISTRY_SECRET }}" | helm registry login "${{ env.REGISTRY }}" \
+            --username "${{ env.REGISTRY_USER }}" --password-stdin
+
+      # 组装矩阵：dir + 版本号（取自各 Chart.yaml 顶层 version 字段）；
+      # 已发布版本（目标仓库存在同名 tag）直接在矩阵生成时过滤掉，不进入发布队列
+      - name: 生成发布矩阵（过滤已发布版本）
+        id: matrix
+        env:
+          DISPATCH_DIRS: ${{ inputs.directories || '' }}
+        run: |
+          if [[ -n "$DISPATCH_DIRS" ]]; then
+            IFS=',' read -ra DIRS <<< "$DISPATCH_DIRS"
+          else
+            read -ra DIRS <<< "${{ steps.glob.outputs.paths }}"
+          fi
+
+          INC_JSON="["
+          FIRST=true
+          for d in "${DIRS[@]}"; do
+            if [[ ! -f "$d/Chart.yaml" ]]; then
+              echo "::warning::跳过 '$d'：无 Chart.yaml"
+              continue
+            fi
+            VER=$(grep -m1 '^version:' "$d/Chart.yaml" | awk '{print $2}' | tr -d '"')
+            if [[ -z "$VER" ]]; then
+              echo "::warning::$d: Chart.yaml 无顶层 version 字段，跳过"
+              continue
+            fi
+
+            # 重复版本探测：helm pull 陌生 tag 非零退出（404），0 = 已存在；
+            # helm pull 不自动创建 --destination 目录，用 mktemp 保证全新空目录，避免残留误判
+            REF="oci://${{ env.REGISTRY }}/${{ env.OCI_CHART_REPO }}"
+            [[ -n "$d" ]] && REF="${REF}/${d}"
+            DEST=$(mktemp -d)
+            if helm pull "$REF" --version "$VER" --destination "$DEST" >/dev/null 2>&1; then
+              echo "::warning::$d v$VER 已存在于 $REF，从矩阵中过滤"
+              continue
+            fi
+
+            if [[ "$FIRST" != "true" ]]; then INC_JSON+=","; fi
+            INC_JSON+="{\"dir\":\"${d}\",\"version\":\"${VER}\"}"
+            FIRST=false
+          done
+          INC_JSON+="]"
+
+          if [[ "$INC_JSON" == "[]" ]]; then
+            echo "::warning::没有可发布的 chart 目录（全部已发布或无 Chart.yaml）"
+            echo "matrix=[]" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "matrix=$(jq -nc --argjson inc "$INC_JSON" '{include: $inc}')" >> "$GITHUB_OUTPUT"
+
+  # ── 按目录并行发布：构建 → OCI 推送 ──
+  release:
+    needs: prepare
+    if: needs.prepare.outputs.matrix != '[]'
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write   # OCI 推送
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: 安装 helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.22.0   # 与 hermes-agent 镜像内版本一致
+
+      # ── 目标 OCI 引用：REGISTRY + 存放路径（OCI_CHART_REPO） + chart 目录 + 版本号 ──
+      - name: 目标 OCI 标签
+        id: target
+        run: |
+          REG="${{ env.REGISTRY }}"
+          BASE="${{ env.OCI_CHART_REPO }}"
+          DIR="${{ matrix.dir }}"
+          if [[ -n "$DIR" ]]; then PATH_REPO="${BASE}/${DIR}"; else PATH_REPO="${BASE}"; fi
+          TAG="${{ matrix.version }}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "oci-ref=oci://${REG}/${PATH_REPO}" >> "$GITHUB_OUTPUT"
+          echo "→ oci://${REG}/${PATH_REPO}:${TAG}"
+
+      - name: Registry 登录
+        run: |
+          echo "${{ env.REGISTRY_SECRET }}" | helm registry login "${{ env.REGISTRY }}" \
+            --username "${{ env.REGISTRY_USER }}" --password-stdin
+
+      # ── 构建并发布（已发布版本已在 prepare 矩阵生成时过滤，进入此 job 即需发布）──
+      # charts/ 不入库，均从 OCI 拉取重建；渲染门禁拦截 bjw-s 库图表的静默失败模式
+      #（渲染为空 = 骨架/依赖问题）；tgz 仅作 OCI 推送中间产物，不上传
+      - name: 构建并发布 OCI chart
+        run: |
+          echo "== 拉取依赖 =="
+          helm dependency build .
+          echo "== lint =="
+          helm lint .
+          echo "== 渲染完整性检查 =="
+          COUNT=$(helm template sanity . --namespace default | grep -cE '^kind:')
+          echo "渲染对象数: $COUNT"
+          [ "$COUNT" -ge 1 ] || { echo "::error::渲染为空（骨架或依赖问题），中止发布"; exit 1; }
+          echo "== 打包 =="
+          mkdir -p dist
+          helm package . --destination dist/
+          echo "== 发布 =="
+          helm push dist/*.tgz "${{ steps.target.outputs.oci-ref }}"
+          echo "✅ ${{ matrix.dir }} v${{ matrix.version }} 已发布到 ${{ steps.target.outputs.oci-ref }}:${{ matrix.version }}"
+        working-directory: ${{ matrix.dir }}

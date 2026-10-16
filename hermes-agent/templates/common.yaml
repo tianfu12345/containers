@@ -1,0 +1,361 @@
+{{- /* ============================================================================
+templates/common.yaml —— bjw-s common 库（library）的骨架。
+
+流程：loader.init（建立渲染上下文与库默认值合并）
+      → hardcodedValues（业务结构骨架：把 values.yaml 的业务键组织为 bjw-s
+         common 库的渲染结构 controllers/secrets/configMaps/persistence/service）
+      → mergeOverwrite 合并进 .Values
+      → loader.generate（渲染所有对象）
+
+渲染在父 chart 上下文进行、直接读 .Values —— 无子图 values 通道问题，
+不存在 values 桥/翻译模板，helm install/template 直接可用。
+业务可变参数一律用 {{ index .Values "..." }} 引用；固定结构（探针、init 脚本、
+挂载路径、安全上下文、RBAC 等）写死在骨架里。
+============================================================================ */ -}}
+
+{{- include "bjw-s.common.loader.init" . }}
+
+{{- define "hermes-agent.hardcodedValues" -}}
+
+{{- /* 子图对象命名（bjw-s 规则：同类对象 >1 启用时加 -<id> 后缀；单对象时 = fullname）。
+   hardcodedValues 在 merge 前渲染，.Values.secrets 还是业务键，不能用
+   getByIdentifier，按规则直接计算（与库的 determineResourceName 一致）。 */ -}}
+{{- $hEnabled := index .Values "hermes" "enabled" | default false -}}
+
+{{- $ovEnabled := index .Values "openviking" "enabled" | default false -}}
+{{- /* secret 名遵循 bjw-s 命名规则：加后缀条件 = or (同类启用数 > 1)
+   (global.alwaysAppendIdentifierToResourceName)，与库的判定同式，保持通用。
+   此处为 merge 前上下文，base = .Release.Name（固定 nameOverride = release）。 */ -}}
+{{- $secretBase := .Release.Name -}}
+{{- $alwaysAppend := dig "global" "alwaysAppendIdentifierToResourceName" false .Values -}}
+{{- $secretCount := add (ternary 1 0 $hEnabled) (ternary 1 0 $ovEnabled) -}}
+{{- $suffixEnabled := or (gt $secretCount 1) $alwaysAppend -}}
+{{- $hermesEnvSecret := ternary (printf "%s-env" $secretBase) $secretBase $suffixEnabled -}}
+{{- $ovEnvSecret := ternary (printf "%s-openviking-env" $secretBase) $secretBase $suffixEnabled -}}
+
+
+{{- /* API keys：升级稳定性 + 自动生成（pre-merge 上下文，业务键可用）*/ -}}
+{{- $apiServerKey := (index .Values "hermes" "apiServerKey" | default "") -}}
+{{- $existing := lookup "v1" "Secret" .Release.Namespace $hermesEnvSecret -}}
+{{- if and $existing (hasKey $existing.data "API_SERVER_KEY") -}}
+  {{- $apiServerKey = index $existing.data "API_SERVER_KEY" | b64dec -}}
+{{- else if empty $apiServerKey -}}
+  {{- $apiServerKey = randAlphaNum 64 | lower -}}
+{{- end -}}
+
+{{- $ovRootKey := (index .Values "openviking" "rootApiKey" | default "") -}}
+{{- $existing = lookup "v1" "Secret" .Release.Namespace $ovEnvSecret -}}
+{{- if and $existing (hasKey $existing.data "OPENVIKING_ROOT_API_KEY") -}}
+  {{- $ovRootKey = index $existing.data "OPENVIKING_ROOT_API_KEY" | b64dec -}}
+{{- else if empty $ovRootKey -}}
+  {{- $ovRootKey = randAlphaNum 64 | lower -}}
+{{- end -}}
+
+# ---- secrets ----
+{{- if or (index .Values "hermes" "enabled") (index .Values "openviking" "enabled") }}
+secrets:
+{{- end }}
+{{- if index .Values "hermes" "enabled" }}
+  env:
+    enabled: true
+    includeChecksumInControllers: ["hermes"]
+    stringData:
+{{- range $k, $v := index .Values "hermes" "env" }}
+      {{ $k }}: {{ $v | quote }}
+{{- end }}
+      API_SERVER_KEY: {{ $apiServerKey | quote }}
+      HERMES_CUSTOM_API_KEY: {{ index .Values "model" "apiKey" | default "CHANGE-ME-model-key" | quote }}
+      HERMES_CUSTOM_BASEURL: {{ index .Values "model" "baseUrl" | default "https://api.siliconflow.cn/v1" | quote }}
+      HERMES_CUSTOM_MODEL: {{ index .Values "model" "name" | default "deepseek-ai/DeepSeek-V4-Flash" | quote }}
+{{- end }}
+{{- if index .Values "openviking" "enabled" }}
+  openviking-env:
+    enabled: true
+    includeChecksumInControllers: ["openviking"]
+    stringData:
+      OPENVIKING_SERVER_PORT: "1933"
+      OPENVIKING_DEBUG: {{ index .Values "openviking" "debug" | default "1" | quote }}
+      OPENVIKING_ROOT_API_KEY: {{ $ovRootKey | quote }}
+      OPENVIKING_EMBEDDING_DENSE_API_KEY: {{ index .Values "openviking" "embeddingDenseApiKey" | default (index .Values "model" "apiKey") | default "CHANGE-ME-embedding" | quote }}
+      OPENVIKING_VLM_API_KEY: {{ index .Values "openviking" "vlmApiKey" | default (index .Values "model" "apiKey") | default "CHANGE-ME-vlm" | quote }}
+{{- end }}
+
+# ---- configMaps ----
+{{- if index .Values "openviking" "enabled" }}
+configMaps:
+  openviking-conf:
+    enabled: true
+    includeChecksumInControllers: ["openviking"]   # 只联动 openviking 控制器
+    data:
+      ov.conf: |-
+        {{- /* JSON 内容直接由业务配置渲染（配置变更 → checksum 变化 → openviking 滚动重启） */ -}}
+        {{- index .Values "openvikingConfig" | toPrettyJson | nindent 8 }}
+{{- end }}
+
+# ---- controllers ----
+{{- if or (index .Values "hermes" "enabled") (index .Values "openviking" "enabled") }}
+controllers:
+{{- end }}
+
+{{- if index .Values "hermes" "enabled" }}
+  hermes:
+    type: statefulset
+    replicas: {{ index .Values "hermes" "replicas" | default 1 }}
+    pod:
+      securityContext:
+        runAsUser: 1000        # 对应镜像内 ubuntu 用户
+        runAsGroup: 1000
+        fsGroup: 1000
+        fsGroupChangePolicy: "OnRootMismatch"
+    # 控制器级容器默认：init 容器与主容器共用同一镜像
+    defaultContainerOptions:
+      image:
+        repository: {{ index .Values "hermes" "image" "repository" | quote }}
+        tag: {{ index .Values "hermes" "image" "tag" | default "latest" | quote }}
+        pullPolicy: {{ index .Values "hermes" "image" "pullPolicy" | default "IfNotPresent" | quote }}
+    initContainers:
+      # 首次启动：把镜像内已初始化好的 /home（含 hermes 安装与默认配置）
+      # 拷贝到持久卷，之后用 marker 文件跳过，避免重复覆盖用户数据
+      01-init-home:
+        securityContext:
+          runAsUser: 0
+          runAsGroup: 0
+          runAsNonRoot: false
+        command:
+          - /bin/sh
+          - -c
+          - |
+            set -e
+            MARKER="/pvc-home/.hermes_init_ready"
+            if [ -f "$MARKER" ]; then
+              echo "hermes 环境已初始化，跳过拷贝。"
+              exit 0
+            fi
+            echo "首次启动：拷贝镜像内 /home 初始化内容到持久卷..."
+            cp -a /home/. /pvc-home/
+            touch "$MARKER"
+            chown -R 1000:1000 /pvc-home
+            echo "初始化完成。"
+    containers:
+      hermes:
+        envFrom:
+          - secretRef:
+              identifier: env
+        env:
+{{- if index .Values "openviking" "enabled" }}
+          # openviking 集成 env（仅双组件启用时注入）；svc 名恒为 {{ .Release.Name }}-openviking
+          #（双组件启用时该类服务 count=2，库按命名规则必加后缀；字符串由 loader 生成期求值渲染）
+          OPENVIKING_ENDPOINT: 'http://{{ .Release.Name }}-openviking.{{ .Release.Namespace }}.svc:1933'
+          OPENVIKING_API_KEY:
+            valueFrom:
+              secretKeyRef:
+                name: {{ $ovEnvSecret | quote }}
+                key: OPENVIKING_ROOT_API_KEY
+          OPENVIKING_ROOT_KEY:
+            valueFrom:
+              secretKeyRef:
+                name: {{ $ovEnvSecret | quote }}
+                key: OPENVIKING_ROOT_API_KEY
+{{- end }}
+        ports:
+          - containerPort: 8080
+            name: http
+          - containerPort: 2222
+            name: ssh
+        # hermes gateway HTTP 健康检查
+        probes:
+          liveness:
+            enabled: true
+            type: HTTP
+            path: /health
+            spec:
+              initialDelaySeconds: 30
+              periodSeconds: 10
+          readiness:
+            enabled: true
+            type: HTTP
+            path: /health
+            spec:
+              initialDelaySeconds: 5
+          startup:
+            enabled: true
+            type: HTTP
+            path: /health
+            spec:
+              initialDelaySeconds: 10
+              failureThreshold: 30
+    statefulset:
+      volumeClaimTemplates:
+        - name: data
+          accessMode: ReadWriteOnce
+          size: {{ index .Values "hermes" "storage" "size" | default "20Gi" | quote }}
+{{- if index .Values "hermes" "storage" "storageClass" }}
+          storageClass: {{ index .Values "hermes" "storage" "storageClass" | quote }}
+{{- end }}
+          advancedMounts:
+            # 主容器：整个 /home 目录
+            hermes:
+              - path: /home
+            # init 容器：/pvc-home 作为首次拷贝落点
+            01-init-home:
+              - path: /pvc-home
+{{- end }}
+
+{{- if index .Values "openviking" "enabled" }}
+  openviking:
+    type: statefulset
+    replicas: {{ index .Values "openviking" "replicas" | default 1 }}
+    pod:
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        fsGroupChangePolicy: "OnRootMismatch"
+    defaultContainerOptions:
+      image:
+        repository: {{ index .Values "openviking" "image" "repository" | quote }}
+        tag: {{ index .Values "openviking" "image" "tag" | default "latest" | quote }}
+        pullPolicy: {{ index .Values "openviking" "image" "pullPolicy" | default "IfNotPresent" | quote }}
+    initContainers:
+      # 确保持久卷目录归属 1000:1000，openviking 启动时自行填充数据
+      01-init-data:
+        securityContext:
+          runAsUser: 0
+          runAsGroup: 0
+          runAsNonRoot: false
+        command:
+          - /bin/sh
+          - -c
+          - |
+            set -e
+            MARKER="/pvc-data/.openviking_init_ready"
+            if [ -f "$MARKER" ]; then
+              echo "openviking 数据目录已初始化，跳过。"
+              exit 0
+            fi
+            chown -R 1000:1000 /pvc-data
+            touch "$MARKER"
+            echo "openviking 数据目录权限初始化完成。"
+    containers:
+      openviking:
+        envFrom:
+          - secretRef:
+              identifier: openviking-env
+        ports:
+          - containerPort: 1933
+            name: http
+        probes:
+          liveness:
+            enabled: true
+            custom: true
+            spec:
+              exec:
+                command:
+                  - openviking-entrypoint
+                  - --healthcheck
+              initialDelaySeconds: 30
+              periodSeconds: 30
+              timeoutSeconds: 5
+              failureThreshold: 3
+          readiness:
+            enabled: true
+            custom: true
+            spec:
+              exec:
+                command:
+                  - openviking-entrypoint
+                  - --healthcheck
+              initialDelaySeconds: 10
+              periodSeconds: 10
+          startup:
+            enabled: true
+            custom: true
+            spec:
+              exec:
+                command:
+                  - openviking-entrypoint
+                  - --healthcheck
+              initialDelaySeconds: 10
+              failureThreshold: 30
+    statefulset:
+      volumeClaimTemplates:
+        - name: data
+          accessMode: ReadWriteOnce
+          size: {{ index .Values "openviking" "storage" "size" | default "10Gi" | quote }}
+{{- if index .Values "openviking" "storage" "storageClass" }}
+          storageClass: {{ index .Values "openviking" "storage" "storageClass" | quote }}
+{{- end }}
+          advancedMounts:
+            openviking:
+              - path: /app/.openviking
+            01-init-data:
+              - path: /pvc-data
+{{- end }}
+
+# ---- persistence（非 VCT 项）----
+{{- if or (index .Values "openviking" "enabled") (index .Values "hermes" "enabled") }}
+persistence:
+{{- end }}
+{{- if index .Values "openviking" "enabled" }}
+  # OpenViking 配置文件 — 将 ConfigMap 挂载为 /app/.openviking/ov.conf（subPath）
+  openviking-conf:
+    enabled: true
+    type: configMap
+    identifier: openviking-conf
+    advancedMounts:
+      openviking:
+        openviking:
+          - path: /app/.openviking/ov.conf
+            subPath: ov.conf
+            readOnly: true
+{{- end }}
+{{- if index .Values "hermes" "enabled" }}
+  varrun:
+    enabled: true
+    type: emptyDir
+    advancedMounts:
+      hermes:
+        hermes:
+          - path: /run
+{{- end }}
+
+# ---- services ----
+{{- if or (index .Values "hermes" "enabled") (index .Values "openviking" "enabled") }}
+service:
+{{- end }}
+{{- if index .Values "hermes" "enabled" }}
+  hermes:
+    controller: hermes
+    enabled: true
+    type: {{ index .Values "hermes" "service" "type" | default "ClusterIP" | quote }}
+    ports:
+      http:
+        enabled: true
+        port: {{ index .Values "hermes" "service" "httpPort" | default 8080 }}
+        targetPort: http
+        protocol: HTTP
+      ssh:
+        enabled: true
+        port: {{ index .Values "hermes" "service" "sshPort" | default 22 }}
+        targetPort: ssh
+        protocol: TCP
+{{- end }}
+{{- if index .Values "openviking" "enabled" }}
+  # OpenViking 服务 — 仅供 hermes 插件集群内调用
+  openviking:
+    controller: openviking
+    enabled: true
+    type: ClusterIP
+    ports:
+      http:
+        enabled: true
+        port: 1933
+        targetPort: http
+        protocol: HTTP
+{{- end }}
+
+{{- end -}}
+{{- $_ := mergeOverwrite .Values (include "hermes-agent.hardcodedValues" . | fromYaml) -}}
+
+{{- /* 渲染所有对象 */ -}}
+{{ include "bjw-s.common.loader.generate" . }}
