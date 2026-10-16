@@ -38,14 +38,14 @@ jobs:
         uses: actions/checkout@v6
 
       # tj-actions 全家桶有过供应链事件，用加固版 step-security 镜像（行为兼容）；
-      # 自动排除 .gitignore 路径（charts/、dist/），match-directories 返回目录本身
+      # 自动排除 .gitignore 路径（charts/、dist/）；返回 Chart.yaml 文件路径，
+      # 目录在下一步取 dirname（match-directories 对文件尾模式无效，不设置）
       - name: 扫描 Chart 目录
         id: glob
         uses: step-security/tj-actions-glob@v22
         with:
           files: |
             **/Chart.yaml
-          match-directories: true
 
       - name: 安装 helm
         uses: azure/setup-helm@v4
@@ -68,7 +68,12 @@ jobs:
           if [[ -n "$DISPATCH_DIRS" ]]; then
             IFS=',' read -ra DIRS <<< "$DISPATCH_DIRS"
           else
-            read -ra DIRS <<< "${{ steps.glob.outputs.paths }}"
+            PATHS="${{ steps.glob.outputs.paths }}"
+            if [[ -n "$PATHS" ]]; then
+              for f in $PATHS; do
+                DIRS+=("$(dirname "$f")")
+              done
+            fi
           fi
 
           INC_JSON="["

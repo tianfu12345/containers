@@ -31,15 +31,14 @@ jobs:
         uses: actions/checkout@v6
 
       # tj-actions 全家桶有过供应链事件，用加固版 step-security 镜像（行为兼容）；
-      # 自动排除 .gitignore 路径与 node_modules，
-      # match-directories 返回含 Dockerfile 的目录本身
+      # 自动排除 .gitignore 路径与 node_modules；返回 Dockerfile 文件路径，
+      # 目录在下一步取 dirname（match-directories 对文件尾模式无效，不设置）
       - name: 扫描 Dockerfile 目录
         id: glob
         uses: step-security/tj-actions-glob@v22
         with:
           files: |
             **/Dockerfile
-          match-directories: true
 
       - name: 确定发布目录
         id: matrix
@@ -60,9 +59,11 @@ jobs:
             done
           else
             PATHS="${{ steps.glob.outputs.paths }}"
-            # tj-actions/glob 输出相对路径；绝对路径兜底：剥掉 workspace 前缀
-            PATHS="${PATHS//${GITHUB_WORKSPACE}\//}"
-            read -ra DIRS <<< "$PATHS"
+            if [[ -n "$PATHS" ]]; then
+              for f in $PATHS; do
+                DIRS+=("$(dirname "$f")")
+              done
+            fi
           fi
 
           echo "发布目录 (${#DIRS[@]}):"
