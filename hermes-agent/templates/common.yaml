@@ -107,6 +107,19 @@ controllers:
         runAsGroup: 1000
         fsGroup: 1000
         fsGroupChangePolicy: "OnRootMismatch"
+{{- $h := index .Values "hermes" -}}
+{{- if $h.nodeSelector }}
+      nodeSelector:
+{{- toYaml $h.nodeSelector | nindent 8 }}
+{{- end }}
+{{- if $h.affinity }}
+      affinity:
+{{- toYaml $h.affinity | nindent 8 }}
+{{- end }}
+{{- if $h.tolerations }}
+      tolerations:
+{{- toYaml $h.tolerations | nindent 8 }}
+{{- end }}
     # 控制器级容器默认：init 容器与主容器共用同一镜像
     defaultContainerOptions:
       image:
@@ -211,6 +224,19 @@ controllers:
         runAsGroup: 1000
         fsGroup: 1000
         fsGroupChangePolicy: "OnRootMismatch"
+{{- $ov := index .Values "openviking" -}}
+{{- if $ov.nodeSelector }}
+      nodeSelector:
+{{- toYaml $ov.nodeSelector | nindent 8 }}
+{{- end }}
+{{- if $ov.affinity }}
+      affinity:
+{{- toYaml $ov.affinity | nindent 8 }}
+{{- end }}
+{{- if $ov.tolerations }}
+      tolerations:
+{{- toYaml $ov.tolerations | nindent 8 }}
+{{- end }}
     defaultContainerOptions:
       image:
         repository: {{ index .Values "openviking" "image" "repository" | quote }}

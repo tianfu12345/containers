@@ -36,6 +36,10 @@ hermes:
     type: ClusterIP
     httpPort: 8080            # 对外 HTTP 端口（容器端口 8080）
     sshPort: 22               # 对外 SSH 端口（容器端口 2222）
+  # 节点调度（可选，空则不加对应字段）：nodeSelector / affinity / tolerations
+  nodeSelector: {}
+  # affinity: {}
+  # tolerations: []
   env:
     TERMINAL_ENV: local
     TZ: Asia/Shanghai
@@ -57,6 +61,10 @@ openviking:
   storage:
     size: 10Gi
     storageClass: ""
+  # 节点调度（可选，空则不加对应字段）：nodeSelector / affinity / tolerations
+  nodeSelector: {}
+  # affinity: {}
+  # tolerations: []
   debug: "1"                  # 调试日志开关，"0" 关闭
   rootApiKey: ""              # OpenViking root API key（留空首次安装自动生成）
   embeddingDenseApiKey: ""
