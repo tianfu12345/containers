@@ -47,7 +47,7 @@ jobs:
       # match-directories 关闭：这里要的是 Dockerfile 文件路径本身
       - name: 扫描 Dockerfile
         id: glob
-        uses: step-security/tj-actions-glob@v1
+        uses: step-security/tj-actions-glob@v22
         with:
           files: |
             **/Dockerfile

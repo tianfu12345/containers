@@ -35,7 +35,7 @@ jobs:
       # match-directories 返回含 Dockerfile 的目录本身
       - name: 扫描 Dockerfile 目录
         id: glob
-        uses: step-security/tj-actions-glob@v1
+        uses: step-security/tj-actions-glob@v22
         with:
           files: |
             **/Dockerfile

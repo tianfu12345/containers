@@ -41,7 +41,7 @@ jobs:
       # 自动排除 .gitignore 路径（charts/、dist/），match-directories 返回目录本身
       - name: 扫描 Chart 目录
         id: glob
-        uses: step-security/tj-actions-glob@v1
+        uses: step-security/tj-actions-glob@v22
         with:
           files: |
             **/Chart.yaml
