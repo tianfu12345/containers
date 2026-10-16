@@ -1,0 +1,9 @@
+# 按类别排除：helm 不支持 docker 式白名单（* 全收 + ! 豁免），只支持排除清单
+# .* 统一收点文件：.dockerignore/.notes.txt/.git/.vscode/编辑器交换文件等
+.*
+# 镜像构建侧文件（chart 目录与 Dockerfile 同层，仅 chart 需要打包）
+Dockerfile
+scripts/
+runit-services/
+# 本地打包产物与调试/临时文件
+dist/
