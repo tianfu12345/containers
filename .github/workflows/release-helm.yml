@@ -17,8 +17,9 @@ on:
 
 env:
   REGISTRY: ${{ vars.REGISTRY || 'ghcr.io' }}
-  # 与 IMAGE_NAME 语义一致：仅定义存放路径（不含 REGISTRY），始终推送至 REGISTRY 之下。
-  # 跨组织/跨仓库推送需要对应权限的 PAT（GITHUB_TOKEN 的 packages: write 仅覆盖本仓库）
+  # 与 IMAGE_NAME 语义一致：仅定义存放路径（不含 REGISTRY），始终推送至 REGISTRY 之下；
+  # 最终仓库路径 = OCI_CHART_REPO/<chart 名>。跨组织/跨仓库推送需对应权限的 PAT
+  #（GITHUB_TOKEN 的 packages: write 仅覆盖本仓库）
   OCI_CHART_REPO: ${{ vars.OCI_CHART_REPO || format('{0}/helm-charts', github.repository_owner) }}
   REGISTRY_USER: ${{ vars.DOCKER_USER || github.actor }}
   REGISTRY_SECRET: ${{ secrets.DOCKER_PASSWORD || secrets.GITHUB_TOKEN }}
@@ -81,14 +82,18 @@ jobs:
               continue
             fi
             VER=$(grep -m1 '^version:' "$d/Chart.yaml" | awk '{print $2}' | tr -d '"')
+            NAME=$(grep -m1 '^name:' "$d/Chart.yaml" | awk '{print $2}' | tr -d '"')
             if [[ -z "$VER" ]]; then
               echo "::warning::$d: Chart.yaml 无顶层 version 字段，跳过"
               continue
             fi
+            if [[ -z "$NAME" ]]; then
+              echo "::warning::$d: Chart.yaml 无 name 字段，跳过"
+              continue
+            fi
 
-            # 重复版本探测：helm pull 成功 = 已存在（404 = 可发布）；mktemp 保证空目录防残留误判
-            REF="oci://${{ env.REGISTRY }}/${{ env.OCI_CHART_REPO }}"
-            [[ -n "$d" ]] && REF="${REF}/${d}"
+            # 重复版本探测：探测最终仓库路径 REGISTRY/OCI_CHART_REPO/<chart 名>
+            REF="oci://${{ env.REGISTRY }}/${{ env.OCI_CHART_REPO }}/${NAME}"
             DEST=$(mktemp -d)
             if helm pull "$REF" --version "$VER" --destination "$DEST" >/dev/null 2>&1; then
               echo "::warning::$d v$VER 已存在于 $REF，从矩阵中过滤"
@@ -131,18 +136,20 @@ jobs:
         with:
           version: v3.22.0   # 与 hermes-agent 镜像内版本一致
 
-      # ── 计算 OCI 目标引用（REGISTRY + OCI_CHART_REPO + chart 目录 + 版本号）──
+      # ── 计算 OCI 目标：push 给父仓库（REGISTRY + OCI_CHART_REPO），显示行给出
+      # 最终路径（含 chart 名）──
       - name: 计算 OCI 目标
         id: target
+        working-directory: ${{ matrix.dir }}
         run: |
           REG="${{ env.REGISTRY }}"
           BASE="${{ env.OCI_CHART_REPO }}"
-          DIR="${{ matrix.dir }}"
-          if [[ -n "$DIR" ]]; then PATH_REPO="${BASE}/${DIR}"; else PATH_REPO="${BASE}"; fi
           TAG="${{ matrix.version }}"
+          NAME=$(grep -m1 '^name:' Chart.yaml | awk '{print $2}' | tr -d '"')
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-          echo "oci-ref=oci://${REG}/${PATH_REPO}" >> "$GITHUB_OUTPUT"
-          echo "→ oci://${REG}/${PATH_REPO}:${TAG}"
+          echo "chart-name=${NAME}" >> "$GITHUB_OUTPUT"
+          echo "oci-ref=oci://${REG}/${BASE}" >> "$GITHUB_OUTPUT"
+          echo "→ oci://${REG}/${BASE}/${NAME}:${TAG}"
 
       - name: helm 登录
         run: |
@@ -166,5 +173,5 @@ jobs:
           helm package . --destination dist/
           echo "== 发布 =="
           helm push dist/*.tgz "${{ steps.target.outputs.oci-ref }}"
-          echo "✅ ${{ matrix.dir }} v${{ matrix.version }} 已发布到 ${{ steps.target.outputs.oci-ref }}:${{ matrix.version }}"
+          echo "✅ ${{ matrix.dir }} v${{ matrix.version }} 已发布到 ${{ steps.target.outputs.oci-ref }}/${{ steps.target.outputs.chart-name }}:${{ matrix.version }}"
         working-directory: ${{ matrix.dir }}
