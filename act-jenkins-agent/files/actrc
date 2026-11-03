@@ -1,0 +1,32 @@
+# act 用户级配置：构建时原样 COPY 到 /etc/act/actrc，并软链为 /root/.actrc。
+#
+# 要改就改本文件后重建镜像，或运行期挂载覆盖：
+#   -v /srv/act/actrc:/root/.actrc:ro
+#
+# '#' 开头的行被忽略；每行按 shell 语法拆分，$VAR 在读取时展开（未定义则展开为空串），
+# 因此这里只写字面量。未知 flag 或非法取值会让 act 直接退出。
+# 仓库内 ./.actrc 里的这类 flag 会被忽略并告警（需命令行 --trust-project-actrc）。
+
+# 平台映射：host 模式在容器内就地执行 job，不创建嵌套容器
+-P ubuntu-latest=-self-hosted
+-P ubuntu-22.04=-self-hosted
+-P ubuntu-24.04=-self-hosted
+
+# 三个持久卷路径（改这里需同步 README 的挂载说明）
+--cache-server-path /var/lib/act/cache
+--artifact-server-path /var/lib/act/artifacts
+--action-cache-path /var/lib/act/actions
+
+# host 模式各 job 共用文件系统，不要调大；并发靠多起 agent 容器
+--concurrent-jobs 1
+--pull=false
+
+# 首次运行需联网填充 action 缓存，预热完成后取消下一行注释：
+#--action-offline-mode
+
+# 自托管 action 源（Gitea/Forgejo/GHES）：取消注释并填实际地址。
+# 前提是 action 仓库已按相同 owner/repo 路径镜像过去，且保留 @v4 这类 tag。
+# github context 由 act 自己算，容器环境变量里的 GITHUB_SERVER_URL 不生效，
+# 必须写成这里的 --env。
+#--env GITHUB_SERVER_URL=https://gitea.example.com
+#--env GITHUB_API_URL=https://gitea.example.com/api/v3

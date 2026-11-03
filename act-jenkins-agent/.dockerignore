@@ -1,2 +1,7 @@
+# 构建上下文只需要 Dockerfile 与 files/：README、.git、本地缓存一概不传。
+# 后两行是例外规则，必须写在 '*' 之后，否则 files/ 子树会被排除，
+# COPY files/ 会失败（Dockerfile 与 .dockerignore 本身始终可用）。
 *
 .*
+!files
+!files/**
