@@ -8,11 +8,13 @@
 # 业务键：
 #   hermes      主组件：image / storage / service 端口 / env / proxy / migrateFromClaim
 #   openviking  RAG 后端：image / storage / debug
+#   webstack    Firecrawl 兼容抓取栈：crw-camofox / searxng / lightpanda / chrome（内部调用，仅 ClusterIP）
 #   model       hermes 使用的模型提供商
 #   secrets     密钥（留空自动生成，升级保持稳定）
 #   openvikingConfig  OpenViking 服务配置（渲染为 ov.conf JSON）
 #
-# 组件开关：hermes.enabled / openviking.enabled；关闭后对应对象与跨组件引用全部裁剪。
+# 组件开关：hermes.enabled / openviking.enabled / webstack.enabled；
+# 关闭后对应对象与跨组件引用（env、svc 名）全部裁剪。
 # 本文件不含真实密钥 —— 敏感字段均为占位符或留空，部署前 --set 覆盖（密钥只进 Secret）。
 # ==============================================================================
 
@@ -69,6 +71,63 @@ openviking:
   rootApiKey: ""              # OpenViking root API key（留空首次安装自动生成）
   embeddingDenseApiKey: ""
   vlmApiKey: ""
+
+# -------- webstack：Firecrawl 兼容抓取栈（crw-camofox + SearXNG 搜索 + 渲染） --------
+# 供 hermes 内部调用（extract → /v1/scrape，search → /v1/search），仅 ClusterIP，不暴露公网。
+# crw-camofox：单 Rust 二进制，Firecrawl 兼容 API（/v1/scrape|/crawl|/map|/search）。
+# 注意：crw 的 /v1/search 硬依赖 SearXNG（无 SearXNG 时返回 400 search_disabled）；
+#       /v1/scrape（extract 链路）不依赖 SearXNG。Camofox/chrome 是渲染层，不是搜索引擎。
+webstack:
+  enabled: true
+  # crw 主 API（:3000，Hermes 经 FIRECRAWL_API_URL 指向此 Service）
+  crw:
+    image:
+      repository: ghcr.io/adambenhassen/crw-camofox
+      tag: "1.8.2"              # 多架构镜像；values 可覆盖
+      pullPolicy: IfNotPresent
+    replicas: 1
+    # crw 内置 config.docker.toml 默认指向 searxng:8080 / lightpanda:9222，集群内由 env 覆盖实际 svc 名
+    # 节点调度（可选）：nodeSelector / affinity / tolerations
+    nodeSelector: {}
+    # affinity: {}
+    # tolerations: []
+  # SearXNG 元搜索（支撑 crw /v1/search）。无 Redis/Valkey（limiter 关，内存缓存）。
+  searxng:
+    image:
+      repository: searxng/searxng
+      tag: "2026.5.9-0cba32c15"  # 固定日期 tag（非 :latest，升级刻意）
+      pullPolicy: IfNotPresent
+    replicas: 1
+    nodeSelector: {}
+    # affinity: {}
+    # tolerations: []
+  # 轻量 JS 渲染层（~64MB），静态/轻度 JS 站点。默认开；可关（crw 退化为 HTTP-only + chrome）。
+  lightpanda:
+    enabled: true
+    image:
+      repository: lightpanda/browser
+      tag: latest
+      pullPolicy: IfNotPresent
+    nodeSelector: {}
+    # affinity: {}
+    # tolerations: []
+  # 重型/反爬渲染兜底（对标 compose 的 --profile heavy：复杂 SPA + Cloudflare）。
+  # 默认关——镜像大（~500MB + 2g shm）。开时可处理 lightpanda 啃不动的重度站点。
+  # 反爬更强可换 browserless/chromium（SSPL 许可，需自审合规）。
+  chrome:
+    enabled: false
+    image:
+      repository: chromedp/headless-shell   # Apache-2/BSD，无许可风险
+      tag: latest
+      pullPolicy: IfNotPresent
+    nodeSelector: {}
+    # affinity: {}
+    # tolerations: []
+  # 出站代理（可选）：填了则注入 crw 容器 HTTP(S)_PROXY（住宅/轮换代理做反爬地基）。
+  # 留空走节点默认出口（集群公网 IP，反爬较弱）。
+  proxy: ""
+  # 自动生成的密钥（留空首次自动生成，升级保持稳定；SearXNG secret_key 由此派生）
+  searxngSecretKey: ""
 
 # -------- hermes 使用的模型提供商（注入 HERMES_CUSTOM_* 环境变量） --------
 model:
