@@ -10,4 +10,6 @@ exec /usr/sbin/sshd -D -e -p 2222 \
   -o "HostKey $HOST_KEY_DIR/ssh_host_ecdsa_key" \
   -o "HostKey $HOST_KEY_DIR/ssh_host_ed25519_key" \
   -o "UsePAM no" \
-  -o "PasswordAuthentication no"
+  -o "PasswordAuthentication no" \
+  -o "ClientAliveInterval 30" \
+  -o "ClientAliveCountMax 3"

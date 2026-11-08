@@ -55,6 +55,11 @@
 {{- $sts := $names.sts -}}
 {{- $svcs := $names.svcs -}}
 {{- $secs := $names.secs -}}
+{{- /* 服务端口：headless 直连 pod，端口即容器端口；非 headless 取业务键 */ -}}
+{{- $hSvc := index .Values "hermes" "service" }}
+{{- $hHeadless := $hSvc.headless | default false }}
+{{- $httpPort := ternary 8080 ($hSvc.httpPort | default 8080) $hHeadless }}
+{{- $sshPort := ternary 2222 ($hSvc.sshPort | default 22) $hHeadless }}
 {{ $.Chart.Name }} 已部署完成。
 
 组件（StatefulSet）：
@@ -66,11 +71,17 @@
 访问方式（集群内 Service，用 port-forward 即可）：
 {{- if hasKey $svcs "hermes" }}
   API:
-    kubectl -n {{ $.Release.Namespace }} port-forward svc/{{ index $svcs "hermes" }} 127.0.0.1:8080:8080
+    kubectl -n {{ $.Release.Namespace }} port-forward svc/{{ index $svcs "hermes" }} 127.0.0.1:8080:{{ $httpPort }}
 
   SSH:
-    kubectl -n {{ $.Release.Namespace }} port-forward svc/{{ index $svcs "hermes" }} 127.0.0.1:2222:22
+    kubectl -n {{ $.Release.Namespace }} port-forward svc/{{ index $svcs "hermes" }} 127.0.0.1:2222:{{ $sshPort }}
     ssh -p 2222 ubuntu@127.0.0.1        # 首次请先将公钥写入 pod 内 ~/.ssh/authorized_keys
+{{- if $hHeadless }}
+
+  集群内 headless DNS（直连 pod，端口即容器端口）：
+    curl http://{{ index $sts "hermes" }}-0.{{ index $svcs "hermes" }}.{{ $.Release.Namespace }}.svc:{{ $httpPort }}/health
+    ssh -p {{ $sshPort }} ubuntu@{{ index $sts "hermes" }}-0.{{ index $svcs "hermes" }}.{{ $.Release.Namespace }}.svc
+{{- end }}
 {{- end }}
 {{- if hasKey $svcs "openviking" }}
   OpenViking:

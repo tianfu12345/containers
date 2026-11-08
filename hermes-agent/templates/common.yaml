@@ -354,10 +354,15 @@ persistence:
 service:
 {{- end }}
 {{- if index .Values "hermes" "enabled" }}
+{{- $hSvc := (index .Values "hermes" "service") | default (dict) }}
+{{- $headless := $hSvc.headless | default false }}
+{{- /* headless 不做端口映射，客户端直连 pod IP：服务端口必须等于容器端口（http 8080 / ssh 2222） */}}
+{{- $httpPort := ternary 8080 ($hSvc.httpPort | default 8080) $headless }}
+{{- $sshPort := ternary 2222 ($hSvc.sshPort | default 22) $headless }}
   hermes:
     controller: hermes
     enabled: true
-{{- if index .Values "hermes" "service" "headless" }}
+{{- if $headless }}
     # headless：clusterIP=None 且未就绪也发布 DNS，StatefulSet 稳定 pod 域名（<pod>.<svc>）需要这两项；
     # headless 只能是 ClusterIP，故此处不再读 service.type
     type: ClusterIP
@@ -365,16 +370,19 @@ service:
     publishNotReadyAddresses: true
 {{- else }}
     type: {{ index .Values "hermes" "service" "type" | default "ClusterIP" | quote }}
+    # SSH 与 HTTP 同 pod 而 readiness 只探 HTTP：端点被探针抖动摘掉时新连接会被 REJECT（表现为断流），
+    # 故未就绪也发布地址（单副本无可切换后端，摘除不会带来任何好处）
+    publishNotReadyAddresses: true
 {{- end }}
     ports:
       http:
         enabled: true
-        port: {{ index .Values "hermes" "service" "httpPort" | default 8080 }}
+        port: {{ $httpPort }}
         targetPort: http
         protocol: HTTP
       ssh:
         enabled: true
-        port: {{ index .Values "hermes" "service" "sshPort" | default 22 }}
+        port: {{ $sshPort }}
         targetPort: ssh
         protocol: TCP
 {{- end }}
