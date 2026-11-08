@@ -12,4 +12,17 @@ else
 fi
 $HERMES config set memory.provider "$provider"
 
+# webstack 集成：extract 走 crw（Firecrawl 兼容 /v1/scrape），search 走 SearXNG。
+# 每个能力只看自己的 env：注入即启用，未注入则清除旧值，避免残留指向已删除的 Service。
+if [ -n "${FIRECRAWL_API_URL}" ]; then
+  $HERMES config set web.extract_backend firecrawl
+else
+  $HERMES config unset web.extract_backend
+fi
+if [ -n "${SEARXNG_URL}" ]; then
+  $HERMES config set web.search_backend searxng
+else
+  $HERMES config unset web.search_backend
+fi
+
 exec $HERMES gateway run

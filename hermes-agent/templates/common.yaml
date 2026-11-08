@@ -23,12 +23,26 @@ templates/common.yaml —— bjw-s common 库（library）的骨架。
 {{- $hEnabled := index .Values "hermes" "enabled" | default false -}}
 
 {{- $ovEnabled := index .Values "openviking" "enabled" | default false -}}
+{{- $wsEnabled := index .Values "webstack" "enabled" | default false -}}
+{{- /* 注意：sprig default 视 false 为空值，显式 enabled:false 会失效——用 dig 保留实际值 */ -}}
+{{- $wsLpEnabled := dig "webstack" "lightpanda" "enabled" true .Values -}}
+{{- $wsCamofoxEnabled := dig "webstack" "camofox" "enabled" true .Values -}}
+{{- /* webstack svc 名（alwaysAppend 恒真 → 全部 <release>-webstack-<id>，
+   跨组件 env 与 crw 内置 config 的覆盖地址均引用这些，与库渲染一致）*/ -}}
+{{- $wsBase := printf "%s-webstack" .Release.Name -}}
+{{- $wsCrwSvc := printf "%s-crw" $wsBase -}}
+{{- $wsSearxngSvc := printf "%s-searxng" $wsBase -}}
+{{- $wsLpSvc := printf "%s-lightpanda" $wsBase -}}
+{{- $wsCamofoxSvc := printf "%s-camofox" $wsBase -}}
+{{- $wsEnvSecret := printf "%s-env" $wsBase -}}
+{{- $wsSearxngSettingsCm := printf "%s-searxng-settings" $wsBase -}}
+{{- $wsProxy := dig "webstack" "proxy" "" .Values -}}
 {{- /* secret 名遵循 bjw-s 命名规则：加后缀条件 = or (同类启用数 > 1)
    (global.alwaysAppendIdentifierToResourceName)，与库的判定同式，保持通用。
    此处为 merge 前上下文，base = .Release.Name（固定 nameOverride = release）。 */ -}}
 {{- $secretBase := .Release.Name -}}
 {{- $alwaysAppend := dig "global" "alwaysAppendIdentifierToResourceName" false .Values -}}
-{{- $secretCount := add (ternary 1 0 $hEnabled) (ternary 1 0 $ovEnabled) -}}
+{{- $secretCount := add (ternary 1 0 $hEnabled) (ternary 1 0 $ovEnabled) (ternary 1 0 $wsEnabled) -}}
 {{- $suffixEnabled := or (gt $secretCount 1) $alwaysAppend -}}
 {{- $hermesEnvSecret := ternary (printf "%s-env" $secretBase) $secretBase $suffixEnabled -}}
 {{- $ovEnvSecret := ternary (printf "%s-openviking-env" $secretBase) $secretBase $suffixEnabled -}}
@@ -51,8 +65,19 @@ templates/common.yaml —— bjw-s common 库（library）的骨架。
   {{- $ovRootKey = randAlphaNum 64 | lower -}}
 {{- end -}}
 
+{{- /* webstack：SearXNG secret key（升级稳定性 + 自动生成；webstack 关闭时不生成）*/ -}}
+{{- $wsSearxngKey := (index .Values "webstack" "searxngSecretKey" | default "") -}}
+{{- if $wsEnabled -}}
+  {{- $existing = lookup "v1" "Secret" .Release.Namespace $wsEnvSecret -}}
+  {{- if and $existing (hasKey $existing.data "SEARXNG_SECRET") -}}
+    {{- $wsSearxngKey = index $existing.data "SEARXNG_SECRET" | b64dec -}}
+  {{- else if empty $wsSearxngKey -}}
+    {{- $wsSearxngKey = randAlphaNum 32 -}}
+  {{- end -}}
+{{- end -}}
+
 # ---- secrets ----
-{{- if or (index .Values "hermes" "enabled") (index .Values "openviking" "enabled") }}
+{{- if or (index .Values "hermes" "enabled") (index .Values "openviking" "enabled") (index .Values "webstack" "enabled") }}
 secrets:
 {{- end }}
 {{- if index .Values "hermes" "enabled" }}
@@ -79,9 +104,18 @@ secrets:
       OPENVIKING_EMBEDDING_DENSE_API_KEY: {{ index .Values "openviking" "embeddingDenseApiKey" | default (index .Values "model" "apiKey") | default "CHANGE-ME-embedding" | quote }}
       OPENVIKING_VLM_API_KEY: {{ index .Values "openviking" "vlmApiKey" | default (index .Values "model" "apiKey") | default "CHANGE-ME-vlm" | quote }}
 {{- end }}
+{{- if index .Values "webstack" "enabled" }}
+  webstack-env:
+    enabled: true
+    includeChecksumInControllers: ["webstack-crw", "webstack-searxng"]
+    stringData:
+      # SearXNG 双 env 名兼容（新版 canonical SEARXNG_SECRET；旧镜像 SEARXNG_SECRET_KEY）
+      SEARXNG_SECRET: {{ $wsSearxngKey | quote }}
+      SEARXNG_SECRET_KEY: {{ $wsSearxngKey | quote }}
+{{- end }}
 
 # ---- configMaps ----
-{{- if index .Values "openviking" "enabled" }}
+{{- if or (index .Values "openviking" "enabled") (index .Values "webstack" "enabled") }}
 configMaps:
   openviking-conf:
     enabled: true
@@ -91,9 +125,42 @@ configMaps:
         {{- /* JSON 内容直接由业务配置渲染（配置变更 → checksum 变化 → openviking 滚动重启） */ -}}
         {{- index .Values "openvikingConfig" | toPrettyJson | nindent 8 }}
 {{- end }}
+{{- if index .Values "webstack" "enabled" }}
+  webstack-searxng-settings:
+    enabled: true
+    includeChecksumInControllers: ["webstack-searxng"]
+    data:
+      settings.yml: |-
+        # SearXNG 配置：json format 显式开启（crw /v1/search 依赖 ?format=json）；
+        # limiter 关（无 Redis/Valkey）；secret_key 为占位，容器 env SEARXNG_SECRET(/KEY) 覆盖。
+        use_default_settings: true
+        general:
+          instance_name: "webstack-search"
+        search:
+          safe_search: 0
+          autocomplete: ""
+          formats:
+            - html
+            - json
+        server:
+          secret_key: "change-me"
+          bind_address: "0.0.0.0"
+          port: 8080
+          limiter: false
+          public_instance: false
+          image_proxy: false
+          method: "GET"
+{{- if $wsProxy }}
+        # 引擎出站走代理（SearXNG 只认 settings 里的 outgoing.proxies，不读 HTTP(S)_PROXY env）
+        outgoing:
+          proxies:
+            http: {{ $wsProxy | quote }}
+            https: {{ $wsProxy | quote }}
+{{- end }}
+{{- end }}
 
 # ---- controllers ----
-{{- if or (index .Values "hermes" "enabled") (index .Values "openviking" "enabled") }}
+{{- if or (index .Values "hermes" "enabled") (index .Values "openviking" "enabled") (index .Values "webstack" "enabled") }}
 controllers:
 {{- end }}
 
@@ -151,6 +218,12 @@ controllers:
               secretKeyRef:
                 name: {{ $ovEnvSecret | quote }}
                 key: OPENVIKING_ROOT_API_KEY
+{{- end }}
+{{- if index .Values "webstack" "enabled" }}
+          # webstack 集成 env：extract 走 crw（Firecrawl 兼容 /v1/scrape），search 走 SearXNG；
+          # run 脚本据这两个 env 的存否设置/清除 web.extract_backend 与 web.search_backend
+          FIRECRAWL_API_URL: 'http://{{ .Release.Name }}-webstack-crw.{{ .Release.Namespace }}.svc:3000'
+          SEARXNG_URL: 'http://{{ .Release.Name }}-webstack-searxng.{{ .Release.Namespace }}.svc:8080'
 {{- end }}
         ports:
           - containerPort: 8080
@@ -291,8 +364,278 @@ controllers:
 {{- end }}
 {{- end }}
 
+{{- if index .Values "webstack" "enabled" }}
+  # crw：Firecrawl 兼容 API（:3000）。deployment 型，无持久卷。
+  webstack-crw:
+    type: deployment
+    replicas: {{ index .Values "webstack" "crw" "replicas" | default 1 }}
+    pod:
+{{- $wsCrw := index .Values "webstack" "crw" -}}
+{{- if $wsCrw.nodeSelector }}
+      nodeSelector:
+{{- toYaml $wsCrw.nodeSelector | nindent 8 }}
+{{- end }}
+{{- if $wsCrw.affinity }}
+      affinity:
+{{- toYaml $wsCrw.affinity | nindent 8 }}
+{{- end }}
+{{- if $wsCrw.tolerations }}
+      tolerations:
+{{- toYaml $wsCrw.tolerations | nindent 8 }}
+{{- end }}
+    defaultContainerOptions:
+      image:
+        repository: {{ index .Values "webstack" "crw" "image" "repository" | quote }}
+        tag: {{ index .Values "webstack" "crw" "image" "tag" | default "latest" | quote }}
+        pullPolicy: {{ index .Values "webstack" "crw" "image" "pullPolicy" | default "IfNotPresent" | quote }}
+    containers:
+      crw:
+        env:
+          # 覆盖内置配置的默认地址（searxng:8080 / lightpanda:9222）：指向本 chart 实际 svc 名
+          #（字符串由 loader 生成期求值渲染，与 hermes 的 OPENVIKING_ENDPOINT 同式）
+          CRW_SEARCH__SEARXNG_URL: 'http://{{ .Release.Name }}-webstack-searxng.{{ .Release.Namespace }}.svc:8080'
+{{- if $wsLpEnabled }}
+          CRW_RENDERER__LIGHTPANDA__WS_URL: 'ws://{{ .Release.Name }}-webstack-lightpanda.{{ .Release.Namespace }}.svc:9222/'
+{{- end }}
+{{- if $wsCamofoxEnabled }}
+          # 重 JS/反爬兜底与 /v1/search 都经 Camofox（REST :9377）
+          CRW_RENDERER__CAMOFOX__BASE_URL: 'http://{{ .Release.Name }}-webstack-camofox.{{ .Release.Namespace }}.svc:9377'
+          # 浏览器驱动的搜索（Google 失败后还要跑 DDG 兜底）要 30s 上下，默认 15s 直接 504
+          CRW_SEARCH__TIMEOUT_MS: "45000"
+{{- end }}
+{{- if $wsProxy }}
+          # reqwest 默认读这三个 env；NO_PROXY 让集群内 svc（searxng / lightpanda / camofox）不经代理
+          HTTP_PROXY: {{ $wsProxy | quote }}
+          HTTPS_PROXY: {{ $wsProxy | quote }}
+          NO_PROXY: "127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,.svc,.cluster.local"
+{{- end }}
+        ports:
+          - containerPort: 3000
+            name: http
+        probes:
+          liveness:
+            enabled: true
+            type: TCP
+            port: 3000
+            spec:
+              initialDelaySeconds: 15
+              periodSeconds: 10
+          readiness:
+            enabled: true
+            type: TCP
+            port: 3000
+            spec:
+              initialDelaySeconds: 5
+          startup:
+            enabled: true
+            type: TCP
+            port: 3000
+            spec:
+              initialDelaySeconds: 5
+              failureThreshold: 30
+
+  # SearXNG 元搜索（支撑 crw /v1/search）。settings.yml 来自 webstack-searxng-settings ConfigMap。
+  webstack-searxng:
+    type: deployment
+    replicas: {{ index .Values "webstack" "searxng" "replicas" | default 1 }}
+    pod:
+{{- $wsSx := index .Values "webstack" "searxng" -}}
+{{- if $wsSx.nodeSelector }}
+      nodeSelector:
+{{- toYaml $wsSx.nodeSelector | nindent 8 }}
+{{- end }}
+{{- if $wsSx.affinity }}
+      affinity:
+{{- toYaml $wsSx.affinity | nindent 8 }}
+{{- end }}
+{{- if $wsSx.tolerations }}
+      tolerations:
+{{- toYaml $wsSx.tolerations | nindent 8 }}
+{{- end }}
+    defaultContainerOptions:
+      image:
+        repository: {{ index .Values "webstack" "searxng" "image" "repository" | quote }}
+        tag: {{ index .Values "webstack" "searxng" "image" "tag" | default "latest" | quote }}
+        pullPolicy: {{ index .Values "webstack" "searxng" "image" "pullPolicy" | default "IfNotPresent" | quote }}
+    containers:
+      searxng:
+        envFrom:
+          - secretRef:
+              identifier: webstack-env
+        env:
+          # 自引用 base_url（结果链接里用它）；crw 经 CRW_SEARCH__SEARXNG_URL 访问本服务
+          SEARXNG_BASE_URL: 'http://{{ .Release.Name }}-webstack-searxng.{{ .Release.Namespace }}.svc:8080/'
+        ports:
+          - containerPort: 8080
+            name: http
+        probes:
+          liveness:
+            enabled: true
+            type: HTTP
+            path: /healthz
+            port: 8080
+            spec:
+              initialDelaySeconds: 30
+              periodSeconds: 10
+          readiness:
+            enabled: true
+            type: HTTP
+            path: /healthz
+            port: 8080
+            spec:
+              initialDelaySeconds: 5
+          startup:
+            enabled: true
+            type: HTTP
+            path: /healthz
+            port: 8080
+            spec:
+              initialDelaySeconds: 5
+              failureThreshold: 30
+{{- end }}
+
+{{- if and (index .Values "webstack" "enabled") $wsLpEnabled }}
+  # LightPanda 轻量 JS 渲染层（CDP ws://:9222）
+  webstack-lightpanda:
+    type: deployment
+    replicas: 1
+    pod:
+{{- $wsLp := index .Values "webstack" "lightpanda" -}}
+{{- if $wsLp.nodeSelector }}
+      nodeSelector:
+{{- toYaml $wsLp.nodeSelector | nindent 8 }}
+{{- end }}
+{{- if $wsLp.affinity }}
+      affinity:
+{{- toYaml $wsLp.affinity | nindent 8 }}
+{{- end }}
+{{- if $wsLp.tolerations }}
+      tolerations:
+{{- toYaml $wsLp.tolerations | nindent 8 }}
+{{- end }}
+    defaultContainerOptions:
+      image:
+        repository: {{ index .Values "webstack" "lightpanda" "image" "repository" | quote }}
+        tag: {{ index .Values "webstack" "lightpanda" "image" "tag" | default "latest" | quote }}
+        pullPolicy: {{ index .Values "webstack" "lightpanda" "image" "pullPolicy" | default "IfNotPresent" | quote }}
+    containers:
+      lightpanda:
+{{- if $wsProxy }}
+        # args 覆盖镜像 CMD（tini -- lightpanda serve --host 0.0.0.0 --port 9222 --log_level info），
+        # 先重述默认值再追加代理；lightpanda 只认 --http-proxy，没有 env 开关
+        args:
+          - /bin/lightpanda
+          - serve
+          - --host
+          - 0.0.0.0
+          - --port
+          - "9222"
+          - --log_level
+          - info
+          - --http-proxy
+          - {{ $wsProxy | quote }}
+{{- end }}
+        ports:
+          - containerPort: 9222
+            name: cdp
+        probes:
+          liveness:
+            enabled: true
+            type: TCP
+            port: 9222
+            spec:
+              initialDelaySeconds: 10
+              periodSeconds: 10
+          readiness:
+            enabled: true
+            type: TCP
+            port: 9222
+            spec:
+              initialDelaySeconds: 5
+          startup:
+            enabled: true
+            type: TCP
+            port: 9222
+            spec:
+              initialDelaySeconds: 5
+              failureThreshold: 30
+{{- end }}
+
+{{- if and (index .Values "webstack" "enabled") $wsCamofoxEnabled }}
+  # Camofox（Camoufox/Firefox 隐身内核，REST :9377）：crw 的重 JS/反爬兜底层，/v1/search 亦经它驱动 Google。
+  webstack-camofox:
+    type: deployment
+    replicas: 1
+    pod:
+{{- $wsCfx := index .Values "webstack" "camofox" -}}
+{{- if $wsCfx.nodeSelector }}
+      nodeSelector:
+{{- toYaml $wsCfx.nodeSelector | nindent 8 }}
+{{- end }}
+{{- if $wsCfx.affinity }}
+      affinity:
+{{- toYaml $wsCfx.affinity | nindent 8 }}
+{{- end }}
+{{- if $wsCfx.tolerations }}
+      tolerations:
+{{- toYaml $wsCfx.tolerations | nindent 8 }}
+{{- end }}
+    defaultContainerOptions:
+      image:
+        repository: {{ index .Values "webstack" "camofox" "image" "repository" | quote }}
+        tag: {{ index .Values "webstack" "camofox" "image" "tag" | default "latest" | quote }}
+        pullPolicy: {{ index .Values "webstack" "camofox" "image" "pullPolicy" | default "IfNotPresent" | quote }}
+    containers:
+      camofox:
+        env:
+          CAMOFOX_BIND_HOST: "0.0.0.0"
+{{ if $wsProxy }}
+{{- $px := urlParse $wsProxy }}
+{{- $pxAuth := splitList ":" $px.userinfo }}
+{{- $pxHostPort := splitList ":" $px.host }}
+{{- /* urlParse 只给 host/hostname，端口要从 host 里取；未写端口时按 scheme 补 80/443 */ -}}
+{{- $pxPort := ternary (last $pxHostPort) (ternary "443" "80" (eq $px.scheme "https")) (gt (len $pxHostPort) 1) }}
+          # 服务端只认 PROXY_*（没有 HTTP(S)_PROXY），故把 webstack.proxy 拆成 host/port/认证；
+          # 认证部分按 URL 原文传递，不做百分号解码
+          PROXY_HOST: {{ $px.hostname | quote }}
+          PROXY_PORT: {{ $pxPort | quote }}
+          PROXY_PROTOCOL: {{ $px.scheme | quote }}
+{{- if $px.userinfo }}
+          PROXY_USERNAME: {{ first $pxAuth | quote }}
+          PROXY_PASSWORD: {{ rest $pxAuth | join ":" | quote }}
+{{- end }}
+{{- end }}
+        ports:
+          - containerPort: 9377
+            name: http
+        probes:
+          liveness:
+            enabled: true
+            type: HTTP
+            path: /health
+            port: 9377
+            spec:
+              initialDelaySeconds: 30
+              periodSeconds: 10
+          readiness:
+            enabled: true
+            type: HTTP
+            path: /health
+            port: 9377
+            spec:
+              initialDelaySeconds: 10
+          startup:
+            enabled: true
+            type: HTTP
+            path: /health
+            port: 9377
+            spec:
+              initialDelaySeconds: 10
+              failureThreshold: 60
+{{- end }}
+
 # ---- persistence（非 VCT 项）----
-{{- if or (index .Values "openviking" "enabled") (index .Values "hermes" "enabled") }}
+{{- if or (index .Values "openviking" "enabled") (index .Values "hermes" "enabled") (index .Values "webstack" "enabled") }}
 persistence:
 {{- end }}
 {{- if index .Values "openviking" "enabled" }}
@@ -317,9 +660,22 @@ persistence:
         hermes:
           - path: /run
 {{- end }}
+{{- if index .Values "webstack" "enabled" }}
+  # SearXNG settings.yml — 将 ConfigMap 挂载为 /etc/searxng/settings.yml（subPath）
+  webstack-searxng-settings:
+    enabled: true
+    type: configMap
+    identifier: webstack-searxng-settings
+    advancedMounts:
+      webstack-searxng:
+        searxng:
+          - path: /etc/searxng/settings.yml
+            subPath: settings.yml
+            readOnly: true
+{{- end }}
 
 # ---- services ----
-{{- if or (index .Values "hermes" "enabled") (index .Values "openviking" "enabled") }}
+{{- if or (index .Values "hermes" "enabled") (index .Values "openviking" "enabled") (index .Values "webstack" "enabled") }}
 service:
 {{- end }}
 {{- if index .Values "hermes" "enabled" }}
@@ -367,6 +723,56 @@ service:
         port: 1933
         targetPort: http
         protocol: HTTP
+{{- end }}
+{{- if index .Values "webstack" "enabled" }}
+  # crw — Hermes 经 FIRECRAWL_API_URL 访问（仅集群内调用）
+  webstack-crw:
+    controller: webstack-crw
+    enabled: true
+    type: ClusterIP
+    ports:
+      http:
+        enabled: true
+        port: 3000
+        targetPort: http
+        protocol: HTTP
+  # SearXNG — 仅 crw /v1/search 调用
+  webstack-searxng:
+    controller: webstack-searxng
+    enabled: true
+    type: ClusterIP
+    ports:
+      http:
+        enabled: true
+        port: 8080
+        targetPort: http
+        protocol: HTTP
+{{- if $wsLpEnabled }}
+  # LightPanda — CDP ws 端点（仅 crw 渲染层调用）
+  webstack-lightpanda:
+    controller: webstack-lightpanda
+    enabled: true
+    type: ClusterIP
+    ports:
+      cdp:
+        enabled: true
+        port: 9222
+        targetPort: cdp
+        protocol: TCP
+{{- end }}
+{{- if $wsCamofoxEnabled }}
+  # Camofox — REST 端点（仅 crw 渲染层与 /v1/search 调用）
+  webstack-camofox:
+    controller: webstack-camofox
+    enabled: true
+    type: ClusterIP
+    ports:
+      http:
+        enabled: true
+        port: 9377
+        targetPort: http
+        protocol: HTTP
+{{- end }}
 {{- end }}
 
 {{- end -}}
