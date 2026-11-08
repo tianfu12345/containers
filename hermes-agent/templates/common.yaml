@@ -155,6 +155,8 @@ controllers:
           - secretRef:
               identifier: env
         env:
+          # 记忆后端开关：容器启动脚本按此值写 memory.provider（镜像内不预设 provider）
+          OPENVIKING_ENABLED: {{ ternary "true" "false" (index .Values "openviking" "enabled" | default false) | quote }}
 {{- if index .Values "openviking" "enabled" }}
           # openviking 集成 env（仅双组件启用时注入）；svc 名恒为 {{ .Release.Name }}-openviking
           #（双组件启用时该类服务 count=2，库按命名规则必加后缀；字符串由 loader 生成期求值渲染）

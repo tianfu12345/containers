@@ -1,5 +1,15 @@
 #!/bin/sh
-/home/ubuntu/.local/bin/hermes config set HERMES_CUSTOM_API_KEY ${HERMES_CUSTOM_API_KEY}
-/home/ubuntu/.local/bin/hermes config set HERMES_CUSTOM_BASEURL ${HERMES_CUSTOM_BASEURL}
-/home/ubuntu/.local/bin/hermes config set HERMES_CUSTOM_MODEL ${HERMES_CUSTOM_MODEL}
-exec /home/ubuntu/.local/bin/hermes gateway run
+HERMES=/home/ubuntu/.local/bin/hermes
+$HERMES config set HERMES_CUSTOM_API_KEY ${HERMES_CUSTOM_API_KEY}
+$HERMES config set HERMES_CUSTOM_BASEURL ${HERMES_CUSTOM_BASEURL}
+$HERMES config set HERMES_CUSTOM_MODEL ${HERMES_CUSTOM_MODEL}
+
+# OpenViking 记忆后端开关
+if [ "${OPENVIKING_ENABLED}" = "true" ]; then
+  provider=openviking
+else
+  provider=builtin
+fi
+$HERMES config set memory.provider "$provider"
+
+exec $HERMES gateway run

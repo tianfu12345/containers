@@ -113,8 +113,7 @@ RUN export PATH="/home/ubuntu/.local/bin:$PATH" && \
     hermes config set model.base_url '${HERMES_CUSTOM_BASEURL}' && \
     hermes config set model.default '${HERMES_CUSTOM_MODEL}' && \
     hermes config set model.api_key '${HERMES_CUSTOM_API_KEY}' && \
-    hermes plugins install openviking --no-enable && \
-    hermes config set memory.provider openviking
+    hermes plugins install openviking --no-enable
 
 # runit 服务定义
 COPY --chown=1000:1000 runit-services/ /etc/service/
