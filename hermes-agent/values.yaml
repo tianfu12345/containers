@@ -16,6 +16,9 @@
 # 本文件不含真实密钥 —— 敏感字段均为占位符或留空，部署前 --set 覆盖（密钥只进 Secret）。
 # ==============================================================================
 
+# 权限修复 init 容器开关：开启时两个组件各带一个 init 容器，把持久卷属主设为 1000:1000
+initPermissions: true
+
 global:
   nameOverride: "{{ .Release.Name }}"
   alwaysAppendIdentifierToResourceName: true
@@ -51,6 +54,7 @@ hermes:
     #NO_PROXY: 127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,.svc,.cluster.local
   apiServerKey: ""            # hermes 网关 API 鉴权 key（留空首次安装自动生成）
 
+
 # -------- openviking 外挂记忆（RAG）后端 :1933 --------
 openviking:
   enabled: true
@@ -73,7 +77,7 @@ openviking:
 
 # -------- hermes 使用的模型提供商（注入 HERMES_CUSTOM_* 环境变量） --------
 model:
-  name: "deepseek-ai/DeepSeek-V4-Flash"
+  name: "deepseek-ai/DeepSeek-V4.1-Flash"
   baseUrl: "https://api.siliconflow.cn/v1"
   apiKey: "CHANGE-ME-model-key"   # 必填
 
@@ -91,7 +95,7 @@ openvikingConfig:
       dimension: 1024
   vlm:
     provider: openai
-    model: deepseek-ai/DeepSeek-V4-Flash
+    model: deepseek-ai/DeepSeek-V4.1-Flash
     api_key: "${OPENVIKING_VLM_API_KEY}"
     api_base: https://api.siliconflow.cn/v1
     temperature: 0.0

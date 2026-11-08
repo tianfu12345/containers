@@ -105,8 +105,6 @@ controllers:
       securityContext:
         runAsUser: 1000        # 对应镜像内 ubuntu 用户
         runAsGroup: 1000
-        fsGroup: 1000
-        fsGroupChangePolicy: "OnRootMismatch"
 {{- $h := index .Values "hermes" -}}
 {{- if $h.nodeSelector }}
       nodeSelector:
@@ -126,29 +124,11 @@ controllers:
         repository: {{ index .Values "hermes" "image" "repository" | quote }}
         tag: {{ index .Values "hermes" "image" "tag" | default "latest" | quote }}
         pullPolicy: {{ index .Values "hermes" "image" "pullPolicy" | default "IfNotPresent" | quote }}
+{{- if .Values.initPermissions }}
     initContainers:
-      # 首次启动：把镜像内已初始化好的 /home（含 hermes 安装与默认配置）
-      # 拷贝到持久卷，之后用 marker 文件跳过，避免重复覆盖用户数据
       01-init-home:
-        securityContext:
-          runAsUser: 0
-          runAsGroup: 0
-          runAsNonRoot: false
-        command:
-          - /bin/sh
-          - -c
-          - |
-            set -e
-            MARKER="/pvc-home/.hermes_init_ready"
-            if [ -f "$MARKER" ]; then
-              echo "hermes 环境已初始化，跳过拷贝。"
-              exit 0
-            fi
-            echo "首次启动：拷贝镜像内 /home 初始化内容到持久卷..."
-            cp -a /home/. /pvc-home/
-            touch "$MARKER"
-            chown -R 1000:1000 /pvc-home
-            echo "初始化完成。"
+{{ include "hermes-agent.initContainer" (dict "seedFrom" "/home" "seedMarker" "/mnt/data/.hermes_init_ready") | indent 8 }}
+{{- end }}
     containers:
       hermes:
         envFrom:
@@ -215,9 +195,11 @@ controllers:
             # 主容器：整个 /home 目录
             hermes:
               - path: /home
-            # init 容器：/pvc-home 作为首次拷贝落点
+{{- if .Values.initPermissions }}
+            # init 容器：卷统一挂到 /mnt/data
             01-init-home:
-              - path: /pvc-home
+              - path: /mnt/data
+{{- end }}
 {{- end }}
 
 {{- if index .Values "openviking" "enabled" }}
@@ -226,10 +208,8 @@ controllers:
     replicas: {{ index .Values "openviking" "replicas" | default 1 }}
     pod:
       securityContext:
-        runAsUser: 1000
         runAsGroup: 1000
-        fsGroup: 1000
-        fsGroupChangePolicy: "OnRootMismatch"
+        runAsUser: 1000
 {{- $ov := index .Values "openviking" -}}
 {{- if $ov.nodeSelector }}
       nodeSelector:
@@ -248,26 +228,11 @@ controllers:
         repository: {{ index .Values "openviking" "image" "repository" | quote }}
         tag: {{ index .Values "openviking" "image" "tag" | default "latest" | quote }}
         pullPolicy: {{ index .Values "openviking" "image" "pullPolicy" | default "IfNotPresent" | quote }}
+{{- if .Values.initPermissions }}
     initContainers:
-      # 确保持久卷目录归属 1000:1000，openviking 启动时自行填充数据
       01-init-data:
-        securityContext:
-          runAsUser: 0
-          runAsGroup: 0
-          runAsNonRoot: false
-        command:
-          - /bin/sh
-          - -c
-          - |
-            set -e
-            MARKER="/pvc-data/.openviking_init_ready"
-            if [ -f "$MARKER" ]; then
-              echo "openviking 数据目录已初始化，跳过。"
-              exit 0
-            fi
-            chown -R 1000:1000 /pvc-data
-            touch "$MARKER"
-            echo "openviking 数据目录权限初始化完成。"
+{{ include "hermes-agent.initContainer" (dict) | indent 8 }}
+{{- end }}
     containers:
       openviking:
         envFrom:
@@ -320,8 +285,10 @@ controllers:
           advancedMounts:
             openviking:
               - path: /app/.openviking
+{{- if .Values.initPermissions }}
             01-init-data:
-              - path: /pvc-data
+              - path: /mnt/data
+{{- end }}
 {{- end }}
 
 # ---- persistence（非 VCT 项）----
