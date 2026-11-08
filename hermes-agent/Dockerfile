@@ -103,7 +103,7 @@ COPY --from=builder-uv /usr/local/bin/uv /usr/local/bin/uv
 # chromium
 RUN npx playwright install-deps chromium
 USER ubuntu
-RUN curl -fsSL https://github.com/NousResearch/hermes-agent/raw/refs/tags/v2026.9.24/scripts/install.sh | bash -s -- --skip-setup --non-interactive
+RUN curl -fsSL https://github.com/NousResearch/hermes-agent/raw/refs/tags/v2026.9.24/scripts/install.sh | bash -s -- --skip-setup --non-interactive --branch v2026.9.24
 RUN export PATH="/home/ubuntu/.local/bin:$PATH" && \
     hermes config set --force gateway.api_server.enabled true && \
     hermes config set API_SERVER_HOST 0.0.0.0 && \
