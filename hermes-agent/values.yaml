@@ -33,7 +33,8 @@ hermes:
     size: 20Gi
     storageClass: ""          # 留空使用集群默认 StorageClass
   service:
-    type: ClusterIP
+    headless: true            # headless（clusterIP: None）：DNS 直解析到 pod IP，sts 的稳定 pod 域名依赖它
+    type: ClusterIP           # headless=true 时固定 ClusterIP，本键仅在 headless=false 时生效
     httpPort: 8080            # 对外 HTTP 端口（容器端口 8080）
     sshPort: 22               # 对外 SSH 端口（容器端口 2222）
   # 节点调度（可选，空则不加对应字段）：nodeSelector / affinity / tolerations

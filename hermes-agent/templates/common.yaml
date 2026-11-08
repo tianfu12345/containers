@@ -198,6 +198,10 @@ controllers:
               initialDelaySeconds: 10
               failureThreshold: 30
     statefulset:
+      # serviceName 必须指向本组件的 Service 对象：库默认取 fullname，与 -<id> 后缀的服务名不符；
+      # headless 下 pod 的稳定 DNS（<pod>.<svc>）也由它提供
+      serviceName:
+        identifier: hermes
       volumeClaimTemplates:
         - name: data
           accessMode: ReadWriteOnce
@@ -353,7 +357,15 @@ service:
   hermes:
     controller: hermes
     enabled: true
+{{- if index .Values "hermes" "service" "headless" }}
+    # headless：clusterIP=None 且未就绪也发布 DNS，StatefulSet 稳定 pod 域名（<pod>.<svc>）需要这两项；
+    # headless 只能是 ClusterIP，故此处不再读 service.type
+    type: ClusterIP
+    clusterIP: None
+    publishNotReadyAddresses: true
+{{- else }}
     type: {{ index .Values "hermes" "service" "type" | default "ClusterIP" | quote }}
+{{- end }}
     ports:
       http:
         enabled: true

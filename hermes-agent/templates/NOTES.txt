@@ -63,7 +63,7 @@
 {{- end }}
 
 ────────────────────────────────────────────────────────
-访问方式（ClusterIP，用 port-forward 即可）：
+访问方式（集群内 Service，用 port-forward 即可）：
 {{- if hasKey $svcs "hermes" }}
   API:
     kubectl -n {{ $.Release.Namespace }} port-forward svc/{{ index $svcs "hermes" }} 127.0.0.1:8080:8080
