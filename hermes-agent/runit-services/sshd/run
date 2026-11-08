@@ -1,9 +1,17 @@
 #!/bin/sh
 HOST_KEY_DIR="/home/ubuntu/.ssh"
+# host key 权限在每次启动时重新断言：持久卷会被 kubelet 的 fsGroup 递归改权
+# 或上 0660（组可读），sshd 对组/他人可读的私钥直接拒载。
+mkdir -p "$HOST_KEY_DIR"
 if [ ! -f "$HOST_KEY_DIR/ssh_host_ed25519_key" ]; then
   ssh-keygen -t rsa -f "$HOST_KEY_DIR/ssh_host_rsa_key" -N "" -q
   ssh-keygen -t ecdsa -f "$HOST_KEY_DIR/ssh_host_ecdsa_key" -N "" -q
   ssh-keygen -t ed25519 -f "$HOST_KEY_DIR/ssh_host_ed25519_key" -N "" -q
+fi
+chmod 700 "$HOST_KEY_DIR"
+chmod 600 "$HOST_KEY_DIR"/ssh_host_*_key
+if [ -f "$HOST_KEY_DIR/authorized_keys" ]; then
+  chmod 600 "$HOST_KEY_DIR/authorized_keys"
 fi
 exec /usr/sbin/sshd -D -e -p 2222 \
   -o "HostKey $HOST_KEY_DIR/ssh_host_rsa_key" \
