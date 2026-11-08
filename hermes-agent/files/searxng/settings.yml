@@ -1,0 +1,57 @@
+# SearXNG 配置：默认引擎只留 bing，另挂两个 Hermes 免费档后端（keenable / firecrawl 云端）；
+# json format 必须显式开启（Hermes 的 searxng 后端按 ?format=json 取结果）；limiter 关（无 Redis/Valkey）；
+# secret_key 为占位，容器 env SEARXNG_SECRET(/KEY) 覆盖。
+# 注意：ConfigMap data 会被 bjw-s 再跑一次 tpl，因此 json_engine 需要的字面双大括号在
+# request_body 里用 Helm 动作转义写出，渲染时才会还原。
+use_default_settings:
+  engines:
+    keep_only:
+      - bing
+general:
+  instance_name: "webstack-search"
+search:
+  safe_search: 0
+  autocomplete: ""
+  formats:
+    - html
+    - json
+server:
+  secret_key: "change-me"
+  bind_address: "0.0.0.0"
+  port: 8080
+  limiter: false
+  public_instance: false
+  image_proxy: false
+  method: "GET"
+#PROXY_OUTGOING#
+engines:
+  # Hermes 的免 key 免费后端，端点是普通 JSON REST，用 SearXNG 自带的 json_engine 接入
+  - name: keenable
+    engine: json_engine
+    shortcut: kee
+    search_url: https://api.keenable.ai/v1/search/public
+    method: POST
+    headers:
+      Content-Type: application/json
+      X-Keenable-Title: hermes-agent
+    request_body: >-
+      {{ "{{" }}"query": "{query}", "max_results": 10{{ "}}" }}
+    timeout: 20
+    results_query: results
+    url_query: url
+    title_query: title
+    content_query: snippet
+  - name: firecrawl
+    engine: json_engine
+    shortcut: fc
+    search_url: https://api.firecrawl.dev/v2/search
+    method: POST
+    headers:
+      Content-Type: application/json
+    request_body: >-
+      {{ "{{" }}"query": "{query}", "limit": 10{{ "}}" }}
+    timeout: 20
+    results_query: data/web
+    url_query: url
+    title_query: title
+    content_query: description

@@ -64,10 +64,11 @@
 
 组件：
 {{- range $id, $n := $sts }}
-  - {{ $n }}  ({{ $id }}){{- if eq $id "hermes" }}  gateway HTTP API :8080 + sshd :2222{{- else if eq $id "openviking" }}  记忆/RAG 后端 :1933{{- else if eq $id "webstack-crw" }}  webstack 抓取 API :3000{{- else if eq $id "webstack-searxng" }}  webstack 元搜索 :8080{{- else if eq $id "webstack-lightpanda" }}  webstack 轻量 JS 渲染 :9222{{- else if eq $id "webstack-camofox" }}  webstack Camofox 隐身渲染 :9377{{- end }}
+  - {{ $n }}  ({{ $id }}){{- if eq $id "hermes" }}  gateway HTTP API :8080 + sshd :2222{{- else if eq $id "openviking" }}  记忆/RAG 后端 :1933{{- else if eq $id "webstack-crw" }}  webstack 抓取 API :3000{{- else if eq $id "webstack-searxng" }}  webstack 元搜索 :8080{{- else if eq $id "webstack-camofox" }}  webstack Camofox 渲染 + browser automation :9377{{- end }}
 {{- end -}}
 {{- if hasKey $sts "webstack-crw" }}
-  hermes extract 经 FIRECRAWL_API_URL 指向 webstack-crw，search 经 SEARXNG_URL 指向 webstack-searxng
+  hermes search 经 SEARXNG_URL 指向 webstack-searxng，extract 经 FIRECRAWL_API_URL 指向 webstack-crw，
+  Browser Automation 经 CAMOFOX_URL 指向 webstack-camofox
 {{- end }}
 
 ────────────────────────────────────────────────────────

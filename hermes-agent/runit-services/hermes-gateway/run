@@ -24,5 +24,12 @@ if [ -n "${SEARXNG_URL}" ]; then
 else
   $HERMES config unset web.search_backend
 fi
+# Browser Automation 走 camofox（Hermes 的 camofox 模式：cloud_provider=camofox + CAMOFOX_URL）
+if [ -n "${CAMOFOX_URL}" ]; then
+  $HERMES config set --force browser.cloud_provider camofox
+else
+  $HERMES config unset browser.cloud_provider
+fi
 
+$HERMES skills list
 exec $HERMES gateway run

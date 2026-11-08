@@ -8,7 +8,7 @@
 # 业务键：
 #   hermes      主组件：image / storage / service 端口 / env / proxy / migrateFromClaim
 #   openviking  RAG 后端：image / storage / debug
-#   webstack    Firecrawl 兼容抓取栈：crw / searxng / lightpanda / camofox（内部调用，仅 ClusterIP）
+#   webstack    抓取/搜索栈：crw（extract）/ searxng（search）/ camofox（渲染 + browser automation）（仅 ClusterIP）
 #   model       hermes 使用的模型提供商
 #   secrets     密钥（留空自动生成，升级保持稳定）
 #   openvikingConfig  OpenViking 服务配置（渲染为 ov.conf JSON）
@@ -32,7 +32,7 @@ hermes:
   replicas: 1
   image:
     repository: ghcr.io/tianfu12345/hermes-agent   # CI 构建产物
-    tag: "0.1.3"
+    tag: "0.1.4"
     pullPolicy: IfNotPresent
   storage:
     size: 20Gi
@@ -77,25 +77,27 @@ openviking:
   embeddingDenseApiKey: ""
   vlmApiKey: ""
 
-# -------- webstack：自建抓取/搜索栈（crw-camofox + SearXNG + 渲染层） --------
-# 供 hermes 内部调用，仅 ClusterIP，不暴露公网：hermes 的 extract 走 crw /v1/scrape、search 走 SearXNG；
-# crw 的渲染阶梯是 lightpanda → camofox，crw 自己的 /v1/search 也经 camofox 驱动 Google。
+# -------- webstack：自建抓取/搜索栈（crw + SearXNG + camofox） --------
+# 供 hermes 内部调用，仅 ClusterIP，不暴露公网：
+#   search  → SearXNG（bing + keenable + firecrawl 云端）
+#   extract → crw /v1/scrape（HTTP 抓取为主，JS/SPA 页由 camofox 渲染兜底）
+#   browser → camofox（Hermes 的 browser.cloud_provider=camofox）
 # crw-camofox：单 Rust 二进制，Firecrawl 兼容 API（/v1/scrape|/crawl|/map|/search）。
 webstack:
   enabled: true
-  # crw 主 API（:3000，Hermes 经 FIRECRAWL_API_URL 指向此 Service）
+  # crw 主 API（:3000，Hermes 经 FIRECRAWL_API_URL 指向此 Service）；只做 fetch，渲染交给 camofox
   crw:
     image:
       repository: ghcr.io/adambenhassen/crw-camofox
       tag: "1.8.2"              # 多架构镜像；values 可覆盖
       pullPolicy: IfNotPresent
     replicas: 1
-    # crw 内置 config.docker.toml 默认指向 searxng:8080 / lightpanda:9222，集群内由 env 覆盖实际 svc 名
+    # 渲染层由 env 指向 camofox（CRW_RENDERER__MODE=camofox + CRW_RENDERER__CAMOFOX__BASE_URL）
     # 节点调度（可选）：nodeSelector / affinity / tolerations
     nodeSelector: {}
     # affinity: {}
     # tolerations: []
-  # SearXNG 元搜索（支撑 crw /v1/search）。无 Redis/Valkey（limiter 关，内存缓存）。
+  # SearXNG：Hermes 的 web_search 后端（bing + keenable + firecrawl 云端）。无 Redis/Valkey（limiter 关，内存缓存）。
   searxng:
     image:
       repository: searxng/searxng
@@ -105,19 +107,9 @@ webstack:
     nodeSelector: {}
     # affinity: {}
     # tolerations: []
-  # 轻量 JS 渲染层（~64MB），静态/轻度 JS 站点。默认开；可关（crw 只剩 HTTP + camofox）。
-  lightpanda:
-    enabled: true
-    image:
-      repository: lightpanda/browser
-      tag: latest
-      pullPolicy: IfNotPresent
-    nodeSelector: {}
-    # affinity: {}
-    # tolerations: []
-  # Camofox（Camoufox/Firefox 隐身内核，REST :9377）：crw 的重 JS/反爬兜底层，crw 的 /v1/search
-  # 也经它驱动 Google；关掉后 crw 只剩 lightpanda，/v1/search 返回 search_disabled。
-  # 镜像约 1.2 GB，单实例实测常驻约 1.3 GB RSS（内存开销最大的一件）；不需要浏览器搜索/重 JS 兜底时关掉。
+  # Camofox（Camoufox/Firefox 隐身内核，REST :9377）：两处共用——crw 的 JS/SPA 渲染兜底，
+  # 以及 Hermes 的 Browser Automation（browser.cloud_provider=camofox）。
+  # 镜像约 1.2 GB，单实例常驻数百 MB；关掉则 extract 只剩 HTTP 抓取、Browser Automation 不可用。
   camofox:
     enabled: true
     image:
@@ -127,9 +119,9 @@ webstack:
     nodeSelector: {}
     # affinity: {}
     # tolerations: []
-  # 出站代理（可选，形如 http://user:pass@host:port）：四件套共用该值，各按自己的机制消费——
+  # 出站代理（可选，形如 http://user:pass@host:port）：三件套共用该值，各按自己的机制消费——
   # crw 注入 HTTP(S)_PROXY（NO_PROXY 排除集群内 svc），SearXNG 写 settings 的 outgoing.proxies，
-  # lightpanda 追加 --http-proxy，camofox 拆成 PROXY_HOST/PORT/PROTOCOL/认证。留空则都走节点默认出口。
+  # camofox 拆成 PROXY_HOST/PORT/PROTOCOL/认证。留空则都走节点默认出口。
   proxy: ""
   # 自动生成的密钥（留空首次自动生成，升级保持稳定；SearXNG secret_key 由此派生）
   searxngSecretKey: ""
