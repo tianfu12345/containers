@@ -492,21 +492,43 @@ controllers:
         repository: {{ index .Values "webstack" "camofox" "image" "repository" | quote }}
         tag: {{ index .Values "webstack" "camofox" "image" "tag" | default "latest" | quote }}
         pullPolicy: {{ index .Values "webstack" "camofox" "image" "pullPolicy" | default "IfNotPresent" | quote }}
+    initContainers:
+      # 持久卷空（首次安装）或卷里浏览器版本与镜像不一致时，把镜像内置的浏览器目录复制进去；
+      # GeoIP 库随后由进程写进同一目录，之后启动直接命中、不再下载
+      01-init-cache:
+        command:
+          - /bin/sh
+          - -c
+          - |
+            set -e
+            if cmp -s /mnt/data/version.json /root/.cache/camoufox/version.json; then
+              echo "持久卷浏览器版本一致，跳过复制。"
+              exit 0
+            fi
+            echo "复制浏览器目录到持久卷 ..."
+            cp -a /root/.cache/camoufox/. /mnt/data/
     containers:
       camofox:
         env:
           CAMOFOX_BIND_HOST: "0.0.0.0"
+          # 默认插件（uBlock Origin）在该出口下载不到，禁用后不再每次启动重试 5 次
+          CAMOFOX_DISABLE_DEFAULT_ADDONS: "1"
+          # GeoIP 库与插件下载走 Node 原生 fetch，只有 --use-env-proxy 才会读 HTTP(S)_PROXY
+          NODE_OPTIONS: "--use-env-proxy"
 {{ if $wsProxy }}
 {{- $px := urlParse $wsProxy }}
 {{- $pxAuth := splitList ":" $px.userinfo }}
 {{- $pxHostPort := splitList ":" $px.host }}
 {{- /* urlParse 只给 host/hostname，端口要从 host 里取；未写端口时按 scheme 补 80/443 */ -}}
 {{- $pxPort := ternary (last $pxHostPort) (ternary "443" "80" (eq $px.scheme "https")) (gt (len $pxHostPort) 1) }}
-          # 服务端只认 PROXY_*（没有 HTTP(S)_PROXY），故把 webstack.proxy 拆成 host/port/认证；
-          # 认证部分按 URL 原文传递，不做百分号解码
+          # 浏览器会话只认 PROXY_*，故把 webstack.proxy 拆成 host/port/认证（原样传递，不做百分号解码）
           PROXY_HOST: {{ $px.hostname | quote }}
           PROXY_PORT: {{ $pxPort | quote }}
           PROXY_PROTOCOL: {{ $px.scheme | quote }}
+          # Node 下载层只认下面这三个标准变量
+          HTTP_PROXY: {{ $wsProxy | quote }}
+          HTTPS_PROXY: {{ $wsProxy | quote }}
+          NO_PROXY: "127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,.svc,.cluster.local"
 {{- if $px.userinfo }}
           PROXY_USERNAME: {{ first $pxAuth | quote }}
           PROXY_PASSWORD: {{ rest $pxAuth | join ":" | quote }}
@@ -579,6 +601,24 @@ persistence:
           - path: /etc/searxng/settings.yml
             subPath: settings.yml
             readOnly: true
+{{- end }}
+{{- if and (index .Values "webstack" "enabled") $wsCamofoxEnabled }}
+  # Camofox 浏览器目录（含 GeoIP 库）：整体持久化，避免每次启动重新下载 50MB GeoLite2；
+  # 镜像升级换了浏览器版本时由 01-init-cache 重新复制覆盖
+  webstack-camofox-cache:
+    enabled: true
+    type: persistentVolumeClaim
+    accessMode: ReadWriteOnce
+    size: {{ index .Values "webstack" "camofox" "storage" "size" | default "2Gi" | quote }}
+{{- if index .Values "webstack" "camofox" "storage" "storageClass" }}
+    storageClass: {{ index .Values "webstack" "camofox" "storage" "storageClass" | quote }}
+{{- end }}
+    advancedMounts:
+      webstack-camofox:
+        camofox:
+          - path: /root/.cache/camoufox
+        01-init-cache:
+          - path: /mnt/data
 {{- end }}
 
 # ---- services ----

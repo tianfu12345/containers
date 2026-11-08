@@ -116,6 +116,11 @@ webstack:
       repository: ghcr.io/jo-inc/camofox-browser
       tag: "1.18.1"
       pullPolicy: IfNotPresent
+    # 浏览器目录（含 GeoIP 库 GeoLite2-City.mmdb）持久化：首次由 init 容器从镜像复制 ~900Mi，
+    # GeoIP 库经代理下载一次后长期复用；镜像 tag 升级换了浏览器版本时会自动重新复制
+    storage:
+      size: 10Gi
+      storageClass: ""
     nodeSelector: {}
     # affinity: {}
     # tolerations: []

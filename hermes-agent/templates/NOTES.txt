@@ -28,9 +28,12 @@
   {{- $secCount := include "hermes-notes.enabledCount" (dict "items" $ctx.Values.secrets) | int -}}
 
   {{- $sts := dict -}}
+  {{- $ctls := dict -}}
   {{- range $id, $v := $ctx.Values.controllers -}}
     {{- if and (kindIs "map" $v) (or (not (hasKey $v "enabled")) $v.enabled) -}}
       {{- $_ := set $sts $id (include "bjw-s.common.lib.determineResourceNameFromValues" (dict "rootContext" $ctx "id" $id "values" $v "itemCount" $ctlCount)) -}}
+      {{- /* 控制器类型决定日志命令前缀：statefulset → sts/，deployment → deploy/ */ -}}
+      {{- $_ := set $ctls $id ($v.type | default "deployment") -}}
     {{- end -}}
   {{- end -}}
 
@@ -48,11 +51,12 @@
     {{- end -}}
   {{- end -}}
 
-  {{- toJson (dict "fullname" $fullname "sts" $sts "svcs" $svcs "secs" $secs) -}}
+  {{- toJson (dict "fullname" $fullname "sts" $sts "ctls" $ctls "svcs" $svcs "secs" $secs) -}}
 {{- end -}}
 
 {{- $names := include "hermes-notes.names" (dict "ctx" $) | fromJson -}}
 {{- $sts := $names.sts -}}
+{{- $ctls := $names.ctls -}}
 {{- $svcs := $names.svcs -}}
 {{- $secs := $names.secs -}}
 {{- /* 服务端口：headless 直连 pod，端口即容器端口；非 headless 取业务键 */ -}}
@@ -108,5 +112,5 @@
 检查状态：
   kubectl -n {{ $.Release.Namespace }} get pods -l app.kubernetes.io/instance={{ $.Release.Name }}
 {{- range $id, $n := $sts }}
-  kubectl -n {{ $.Release.Namespace }} logs sts/{{ $n }}
+  kubectl -n {{ $.Release.Namespace }} logs {{ ternary "deploy" "sts" (eq (index $ctls $id) "deployment") }}/{{ $n }}
 {{- end }}
