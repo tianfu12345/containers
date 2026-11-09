@@ -6,9 +6,10 @@
 # helm install/template 直接可用（无需附加 values 文件或脚本）。
 #
 # 业务键：
-#   hermes      主组件：image / storage / service 端口 / env / proxy / migrateFromClaim
+#   hermes      主组件：image / storage / service 端口 / env / proxy / sudo / migrateFromClaim
 #   openviking  RAG 后端：image / storage / debug
 #   webstack    抓取/搜索栈：crw（extract）/ searxng（search）/ camofox（渲染 + browser automation）（仅 ClusterIP）
+#   mirrors     运行时软件源（apt / pypi / npm；留空用镜像默认）
 #   model       hermes 使用的模型提供商
 #   secrets     密钥（留空自动生成，升级保持稳定）
 #   openvikingConfig  OpenViking 服务配置（渲染为 ov.conf JSON）
@@ -32,7 +33,7 @@ hermes:
   replicas: 1
   image:
     repository: ghcr.io/tianfu12345/hermes-agent   # CI 构建产物
-    tag: "0.1.4"
+    tag: "0.1.5"
     pullPolicy: IfNotPresent
   storage:
     size: 20Gi
@@ -55,6 +56,9 @@ hermes:
     #HTTPS_PROXY: http://proxy:1080
     #NO_PROXY: 127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,.svc,.cluster.local
   apiServerKey: ""            # hermes 网关 API 鉴权 key（留空首次安装自动生成）
+  # true：给 ubuntu 用户 NOPASSWD sudo（pod 内 apt-get install / 系统级改动）。
+  # 依赖 setuid 提权（同时写入 allowPrivilegeEscalation: true）；restricted PSA 集群会拒绝此类 pod。
+  sudo: false
 
 
 # -------- openviking 外挂记忆（RAG）后端 :1933 --------
@@ -130,6 +134,18 @@ webstack:
   proxy: ""
   # 自动生成的密钥（留空首次自动生成，升级保持稳定；SearXNG secret_key 由此派生）
   searxngSecretKey: ""
+
+# -------- 运行时软件源（留空 = 用镜像内置默认；改值触发 hermes pod 滚动重启） --------
+# 挂在系统级路径（/etc），pod 内用户级配置优先级更高，且落在家目录 PVC 上跨重启保留：
+#   pip → ~/.config/pip/pip.conf    uv → ~/.config/uv/uv.toml    npm → ~/.npmrc
+# 镜像内没装 pip（Hermes 用 uv），pip.conf 只对你自己后来的 pip 生效；uv 必须单独的 uv.toml。
+# apt 源由 chart 拥有（只挂 ubuntu.sources 单文件），目录其余位置可 sudo 追加额外 .sources。
+# JDK 已预装在镜像里（/usr/bin/java、javac）；额外 apt 包装进容器层，pod 重建后需重装。
+mirrors:
+  apt: ""                  # 例 https://mirrors.aliyun.com/ubuntu（同一地址覆盖 -updates/-security）
+  pypi: ""                 # 例 https://mirrors.aliyun.com/pypi/simple
+  pypiTrustedHost: ""      # 源为 http 时填：pip trusted-host + uv allow-insecure-host
+  npm: ""                  # 例 https://registry.npmmirror.com
 
 # -------- hermes 使用的模型提供商（注入 HERMES_CUSTOM_* 环境变量） --------
 model:

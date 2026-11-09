@@ -35,6 +35,15 @@ templates/common.yaml —— bjw-s common 库（library）的骨架。
 {{- $wsEnvSecret := printf "%s-env" $wsBase -}}
 {{- $wsSearxngSettingsCm := printf "%s-searxng-settings" $wsBase -}}
 {{- $wsProxy := dig "webstack" "proxy" "" .Values -}}
+{{- /* 运行时软件源与 sudo：只作用于 hermes 容器，故随 hermes.enabled 一并裁剪 */ -}}
+{{- $sudoRaw := dig "hermes" "sudo" false .Values -}}
+{{- $sudoEnabled := and $hEnabled $sudoRaw -}}
+{{- $mirrors := dig "mirrors" (dict) .Values -}}
+{{- $aptMirror := $mirrors.apt | default "" -}}
+{{- $pypiMirror := $mirrors.pypi | default "" -}}
+{{- $pypiTrusted := $mirrors.pypiTrustedHost | default "" -}}
+{{- $npmMirror := $mirrors.npm | default "" -}}
+{{- $mirrorEnabled := and $hEnabled (or $aptMirror $pypiMirror $npmMirror) -}}
 {{- /* secret 名遵循 bjw-s 命名规则：加后缀条件 = or (同类启用数 > 1)
    (global.alwaysAppendIdentifierToResourceName)，与库的判定同式，保持通用。
    此处为 merge 前上下文，base = .Release.Name（固定 nameOverride = release）。 */ -}}
@@ -113,8 +122,57 @@ secrets:
 {{- end }}
 
 # ---- configMaps ----
-{{- if or (index .Values "openviking" "enabled") (index .Values "webstack" "enabled") }}
+{{- if or (index .Values "openviking" "enabled") (index .Values "webstack" "enabled") $sudoEnabled $mirrorEnabled }}
 configMaps:
+{{- end }}
+{{- if $sudoEnabled }}
+  # sudoers：0440 单文件挂到 /etc/sudoers.d/ubuntu；关闭开关时该文件在 pod 内不存在
+  hermes-sudo:
+    enabled: true
+    includeChecksumInControllers: ["hermes"]
+    data:
+      ubuntu: |
+        ubuntu ALL=(ALL) NOPASSWD:ALL
+{{- end }}
+{{- if $mirrorEnabled }}
+  # 系统级软件源：只渲染已填写的项；pod 内用户级配置（家目录，PVC 持久）优先级更高
+  hermes-mirrors:
+    enabled: true
+    includeChecksumInControllers: ["hermes"]
+    data:
+{{- if $aptMirror }}
+      # deb822：镜像站同一地址覆盖 -updates/-backports/-security；套件与 ubuntu:26.04（resolute）绑定
+      ubuntu.sources: |
+        Types: deb
+        URIs: {{ $aptMirror }}
+        Suites: resolute resolute-updates resolute-backports resolute-security
+        Components: main universe restricted multiverse
+        Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+{{- end }}
+{{- if $pypiMirror }}
+      pip.conf: |
+        [global]
+        index-url = {{ $pypiMirror }}
+{{- if $pypiTrusted }}
+        trusted-host = {{ $pypiTrusted }}
+{{- end }}
+      # uv 明确不读 pip.conf / PIP_INDEX_URL，必须单独的 uv.toml（系统级路径）
+      uv.toml: |
+        [[index]]
+        url = "{{ $pypiMirror }}"
+        default = true
+{{- if $pypiTrusted }}
+        allow-insecure-host = ["{{ $pypiTrusted }}"]
+{{- end }}
+{{- end }}
+{{- if $npmMirror }}
+      # npm 全局配置：fnm 的 node prefix 含版本号，故用 env NPM_CONFIG_GLOBALCONFIG 指向固定路径；
+      # 用户 ~/.npmrc（userconfig）优先级更高
+      npmrc: |
+        registry={{ $npmMirror }}
+{{- end }}
+{{- end }}
+{{- if or (index .Values "openviking" "enabled") (index .Values "webstack" "enabled") }}
   openviking-conf:
     enabled: true
     includeChecksumInControllers: ["openviking"]   # 只联动 openviking 控制器
@@ -176,12 +234,21 @@ controllers:
 {{- end }}
     containers:
       hermes:
+{{- if $sudoEnabled }}
+        securityContext:
+          # sudo 依赖 setuid 提权；restricted PSA 集群会拒绝该 pod（本项必须为 false）
+          allowPrivilegeEscalation: true
+{{- end }}
         envFrom:
           - secretRef:
               identifier: env
         env:
           # 记忆后端开关：容器启动脚本按此值写 memory.provider（镜像内不预设 provider）
           OPENVIKING_ENABLED: {{ ternary "true" "false" (index .Values "openviking" "enabled" | default false) | quote }}
+{{- if $npmMirror }}
+          # npm 全局配置固定路径（fnm 的 node prefix 随版本变，不能写进 prefix）；用户 ~/.npmrc 优先
+          NPM_CONFIG_GLOBALCONFIG: /etc/npmrc
+{{- end }}
 {{- if index .Values "openviking" "enabled" }}
           # openviking 集成 env（仅双组件启用时注入）；svc 名恒为 {{ .Release.Name }}-openviking
           #（双组件启用时该类服务 count=2，库按命名规则必加后缀；字符串由 loader 生成期求值渲染）
@@ -588,6 +655,49 @@ persistence:
       hermes:
         hermes:
           - path: /run
+{{- end }}
+{{- if $sudoEnabled }}
+  # sudoers 单文件（0440，root:root）；关闭开关时 pod 内不存在该文件
+  hermes-sudo:
+    enabled: true
+    type: configMap
+    identifier: hermes-sudo
+    defaultMode: 0440
+    advancedMounts:
+      hermes:
+        hermes:
+          - path: /etc/sudoers.d/ubuntu
+            subPath: ubuntu
+            readOnly: true
+{{- end }}
+{{- if $mirrorEnabled }}
+  # 系统级软件源。只挂 chart 已填写的文件；目录内其余位置可 sudo 追加额外 .sources。
+  hermes-mirrors:
+    enabled: true
+    type: configMap
+    identifier: hermes-mirrors
+    defaultMode: 0644
+    advancedMounts:
+      hermes:
+        hermes:
+{{- if $aptMirror }}
+          - path: /etc/apt/sources.list.d/ubuntu.sources
+            subPath: ubuntu.sources
+            readOnly: true
+{{- end }}
+{{- if $pypiMirror }}
+          - path: /etc/pip.conf
+            subPath: pip.conf
+            readOnly: true
+          - path: /etc/uv/uv.toml
+            subPath: uv.toml
+            readOnly: true
+{{- end }}
+{{- if $npmMirror }}
+          - path: /etc/npmrc
+            subPath: npmrc
+            readOnly: true
+{{- end }}
 {{- end }}
 {{- if index .Values "webstack" "enabled" }}
   # SearXNG settings.yml — 将 ConfigMap 挂载为 /etc/searxng/settings.yml（subPath）

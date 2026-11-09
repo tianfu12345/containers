@@ -61,6 +61,7 @@ RUN /scripts/utils.sh run_install_script "https://astral.sh/uv/install.sh" && \
 # ==========================================
 FROM ubuntu:26.04
 COPY scripts /scripts
+# JDK 预装（headless，无 GUI 依赖）：java/javac 直接可用，不依赖运行期 sudo + apt
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
     chmod +x /scripts/utils.sh && \
@@ -74,6 +75,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         openssl nftables psmisc lsof strace \
         make build-essential \
         ffmpeg \
+        openjdk-21-jdk-headless \
         skopeo uidmap \
         runit tini && \
     locale-gen zh_CN.UTF-8 en_US.UTF-8
