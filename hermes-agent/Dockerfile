@@ -111,7 +111,7 @@ COPY --from=builder-uv /usr/local/bin/uv /usr/local/bin/uv
 
 # chromium
 RUN npx playwright install-deps chromium
-ARG HERMES_VERSION=v2026.9.24
+ARG HERMES_VERSION=v0.23.1
 USER ubuntu
 RUN curl -fsSL https://github.com/NousResearch/hermes-agent/raw/refs/tags/${HERMES_VERSION}/scripts/install.sh | bash -s -- --skip-setup --non-interactive --branch ${HERMES_VERSION}
 RUN export PATH="/home/ubuntu/.local/bin:$PATH" && \
