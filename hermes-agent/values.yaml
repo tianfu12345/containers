@@ -9,6 +9,7 @@
 #   hermes      主组件：image / storage / service 端口 / env / proxy / sudo / migrateFromClaim
 #   openviking  RAG 后端：image / storage / debug
 #   webstack    抓取/搜索栈：crw（extract）/ searxng（search）/ camofox（渲染 + browser automation）（仅 ClusterIP）
+#   rbac        hermes 的 ServiceAccount 与 namespace 内 Role/RoleBinding
 #   mirrors     运行时软件源（apt / pypi / npm；留空用镜像默认）
 #   model       hermes 使用的模型提供商
 #   secrets     密钥（留空自动生成，升级保持稳定）
@@ -21,6 +22,11 @@
 
 # 权限修复 init 容器开关：开启时两个组件各带一个 init 容器，把持久卷属主设为 1000:1000
 initPermissions: true
+
+# Hermes 在自身 namespace 内的 k8s 读写权限：ServiceAccount + Role + RoleBinding。
+# 关闭后 pod 使用 namespace 的 default ServiceAccount（无额外权限）。
+rbac:
+  enabled: true
 
 global:
   nameOverride: "{{ .Release.Name }}"

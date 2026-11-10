@@ -207,6 +207,70 @@ configMaps:
 {{ .Files.Get "files/searxng/settings.yml" | replace "#PROXY_OUTGOING#" $proxyOutgoing | indent 8 }}
 {{- end }}
 
+{{- if and (index .Values "hermes" "enabled") (index .Values "rbac" "enabled") }}
+# ---- serviceAccount / RBAC ----
+# hermes 在自身 namespace 内的日常读写权限：ServiceAccount + Role + RoleBinding。
+# 关闭 rbac.enabled 时三者都不渲染，pod 回落 namespace 的 default ServiceAccount。
+serviceAccount:
+  hermes:
+    enabled: true
+rbac:
+  roles:
+    hermes:
+      enabled: true
+      type: Role
+      rules:
+        # 常规对象：pod / service / endpoint / configmap / sa
+        - apiGroups: [""]
+          resources: ["pods", "services", "endpoints", "configmaps", "serviceaccounts", "replicationcontrollers"]
+          verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+        # secret / pvc 给读写但不给 delete（误删代价高）
+        - apiGroups: [""]
+          resources: ["secrets", "persistentvolumeclaims"]
+          verbs: ["get", "list", "watch", "create", "update", "patch"]
+        # 日志与状态只读
+        - apiGroups: [""]
+          resources: ["pods/log", "pods/status"]
+          verbs: ["get", "list", "watch"]
+        # 进容器调试
+        - apiGroups: [""]
+          resources: ["pods/exec", "pods/attach", "pods/portforward", "pods/ephemeralcontainers"]
+          verbs: ["get", "create", "update", "patch"]
+        - apiGroups: [""]
+          resources: ["events"]
+          verbs: ["get", "list", "watch"]
+        - apiGroups: ["apps"]
+          resources: ["deployments", "daemonsets", "statefulsets", "replicasets"]
+          verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+        - apiGroups: ["batch"]
+          resources: ["jobs", "cronjobs"]
+          verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+        - apiGroups: ["networking.k8s.io"]
+          resources: ["ingresses", "networkpolicies"]
+          verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+        - apiGroups: ["autoscaling"]
+          resources: ["horizontalpodautoscalers"]
+          verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+        # 只读：端点切片、事件、metrics（metrics-server 不存在时该规则无害）
+        - apiGroups: ["discovery.k8s.io"]
+          resources: ["endpointslices"]
+          verbs: ["get", "list", "watch"]
+        - apiGroups: ["events.k8s.io"]
+          resources: ["events"]
+          verbs: ["get", "list", "watch"]
+        - apiGroups: ["metrics.k8s.io"]
+          resources: ["pods", "nodes"]
+          verbs: ["get", "list"]
+  bindings:
+    hermes:
+      enabled: true
+      type: RoleBinding
+      roleRef:
+        identifier: hermes
+      subjects:
+        - identifier: hermes
+{{- end }}
+
 # ---- controllers ----
 {{- if or (index .Values "hermes" "enabled") (index .Values "openviking" "enabled") (index .Values "webstack" "enabled") }}
 controllers:
@@ -216,7 +280,15 @@ controllers:
   hermes:
     type: statefulset
     replicas: {{ index .Values "hermes" "replicas" | default 1 }}
+{{- if index .Values "rbac" "enabled" }}
+    serviceAccount:
+      identifier: hermes
+{{- end }}
     pod:
+{{- if index .Values "rbac" "enabled" }}
+      # 库默认 automountServiceAccountToken: false，显式打开才能使用 SA 权限
+      automountServiceAccountToken: true
+{{- end }}
       securityContext:
         runAsUser: 1000        # 对应镜像内 ubuntu 用户
         runAsGroup: 1000
