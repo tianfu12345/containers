@@ -117,8 +117,10 @@ RUN export PATH="/home/ubuntu/.local/bin:$PATH" && \
     hermes config set model.api_key '${HERMES_CUSTOM_API_KEY}' && \
     hermes plugins install openviking --no-enable
 
-# runit 服务定义
-COPY --chown=1000:1000 runit-services/ /etc/service/
+# runit 服务：sshd 定义随镜像；hermes-gateway 的 run 由 chart 的 ConfigMap 提供，
+# files/hermes-gateway/run 是唯一源（镜像内保留同源副本，ConfigMap 未挂载时兜底）
+COPY --chown=1000:1000 runit-services/sshd /etc/service/sshd
+COPY --chown=1000:1000 --chmod=0755 files/hermes-gateway/run /etc/service/hermes-gateway/run
 
 WORKDIR /home/ubuntu
 

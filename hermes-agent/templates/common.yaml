@@ -122,8 +122,20 @@ secrets:
 {{- end }}
 
 # ---- configMaps ----
-{{- if or (index .Values "openviking" "enabled") (index .Values "webstack" "enabled") $sudoEnabled $mirrorEnabled }}
+{{- if or (index .Values "hermes" "enabled") (index .Values "openviking" "enabled") (index .Values "webstack" "enabled") $sudoEnabled $mirrorEnabled }}
 configMaps:
+{{- end }}
+{{- if index .Values "hermes" "enabled" }}
+  # hermes-gateway 的 runit 启动脚本：唯一源是 files/hermes-gateway/run（镜像从同一文件构建，
+  # 作为 ConfigMap 未挂载时的兜底）。放 ConfigMap 是为了改启动逻辑不必重建镜像；
+  # 内容变化触发 checksum → hermes 滚动重启（subPath 挂载本身不热更新）。
+  # 注意：脚本内容会经库的二次 tpl，files 里禁止出现 Helm 动作语法。
+  hermes-gateway-run:
+    enabled: true
+    includeChecksumInControllers: ["hermes"]
+    data:
+      run: |-
+{{ .Files.Get "files/hermes-gateway/run" | indent 8 }}
 {{- end }}
 {{- if $sudoEnabled }}
   # sudoers：0440 单文件挂到 /etc/sudoers.d/ubuntu；关闭开关时该文件在 pod 内不存在
@@ -253,12 +265,8 @@ controllers:
           # openviking 集成 env（仅双组件启用时注入）；svc 名恒为 {{ .Release.Name }}-openviking
           #（双组件启用时该类服务 count=2，库按命名规则必加后缀；字符串由 loader 生成期求值渲染）
           OPENVIKING_ENDPOINT: 'http://{{ .Release.Name }}-openviking.{{ .Release.Namespace }}.svc:1933'
+          # 插件只读 OPENVIKING_{ENDPOINT,API_KEY,ACCOUNT,USER,AGENT}；该 key 的值即服务端 root key
           OPENVIKING_API_KEY:
-            valueFrom:
-              secretKeyRef:
-                name: {{ $ovEnvSecret | quote }}
-                key: OPENVIKING_ROOT_API_KEY
-          OPENVIKING_ROOT_KEY:
             valueFrom:
               secretKeyRef:
                 name: {{ $ovEnvSecret | quote }}
@@ -655,6 +663,18 @@ persistence:
       hermes:
         hermes:
           - path: /run
+  # 启动脚本单文件覆盖镜像内同名文件；只挂文件，/etc/service/hermes-gateway/supervise 必须留在可写层
+  hermes-gateway-run:
+    enabled: true
+    type: configMap
+    identifier: hermes-gateway-run
+    defaultMode: 0755
+    advancedMounts:
+      hermes:
+        hermes:
+          - path: /etc/service/hermes-gateway/run
+            subPath: run
+            readOnly: true
 {{- end }}
 {{- if $sudoEnabled }}
   # sudoers 单文件（0440，root:root）；关闭开关时 pod 内不存在该文件

@@ -1,8 +1,22 @@
 #!/bin/sh
 HERMES=/home/ubuntu/.local/bin/hermes
-$HERMES config set HERMES_CUSTOM_API_KEY ${HERMES_CUSTOM_API_KEY}
-$HERMES config set HERMES_CUSTOM_BASEURL ${HERMES_CUSTOM_BASEURL}
-$HERMES config set HERMES_CUSTOM_MODEL ${HERMES_CUSTOM_MODEL}
+$HERMES config set HERMES_CUSTOM_API_KEY "${HERMES_CUSTOM_API_KEY}"
+$HERMES config set HERMES_CUSTOM_BASEURL "${HERMES_CUSTOM_BASEURL}"
+$HERMES config set HERMES_CUSTOM_MODEL "${HERMES_CUSTOM_MODEL}"
+
+# 集成参数落盘到 ~/.hermes/.env：.env 对所有入口可见，并覆盖容器 env 中的同名旧值
+sync_env() {
+  if [ -n "$2" ]; then
+    $HERMES config set "$1" "$2"
+  else
+    $HERMES config unset "$1"
+  fi
+}
+sync_env FIRECRAWL_API_URL "${FIRECRAWL_API_URL}"
+sync_env SEARXNG_URL "${SEARXNG_URL}"
+sync_env CAMOFOX_URL "${CAMOFOX_URL}"
+sync_env OPENVIKING_ENDPOINT "${OPENVIKING_ENDPOINT}"
+sync_env OPENVIKING_API_KEY "${OPENVIKING_API_KEY}"
 
 # OpenViking 记忆后端开关
 if [ "${OPENVIKING_ENABLED}" = "true" ]; then
