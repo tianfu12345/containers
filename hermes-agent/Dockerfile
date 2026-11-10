@@ -1,7 +1,14 @@
 # ==========================================
+# 基础镜像：apt 源统一替换为 Azure 镜像
+# ==========================================
+FROM ubuntu:26.04 AS ubuntu-base
+RUN sed -i -E 's#https?://(archive|security|ports)\.ubuntu\.com/ubuntu#http://azure.archive.ubuntu.com/ubuntu#g' \
+        /etc/apt/sources.list.d/ubuntu.sources
+
+# ==========================================
 # 下载和提取二进制文件
 # ==========================================
-FROM ubuntu:26.04 AS builder
+FROM ubuntu-base AS builder
 COPY scripts /scripts
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
@@ -59,7 +66,7 @@ RUN /scripts/utils.sh run_install_script "https://astral.sh/uv/install.sh" && \
 # ==========================================
 # 运行时镜像
 # ==========================================
-FROM ubuntu:26.04
+FROM ubuntu-base
 COPY scripts /scripts
 # JDK 预装（headless，无 GUI 依赖）：java/javac 直接可用，不依赖运行期 sudo + apt
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
